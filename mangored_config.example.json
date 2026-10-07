@@ -1,0 +1,16 @@
+{
+    "read_only": true,
+    "scan_interval": 30,
+    "interface": "",
+    "auto_scan": true,
+    "db_path": "mangored.db",
+    "router_type": "simulator",
+    "router_host": "192.168.1.1",
+    "router_port": 80,
+    "router_user": "admin",
+    "router_password": "",
+    "router_api_token": "",
+    "router_use_https": false,
+    "router_verify_ssl": true,
+    "enable_desktop_notifications": true
+}

@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MangoRed - Monitor Doméstico de Red Local (Kali Linux)</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%22><text y=%2226%22 font-size=%2226%22>🥭</text></svg>">
+</head>
+<body>
+
+    <!-- Encabezado Superior -->
+    <header class="header">
+        <div class="header-container">
+            <div class="brand">
+                <div class="brand-icon">🥭</div>
+                <div>
+                    <h1 class="brand-title">MangoRed</h1>
+                    <div class="brand-subtitle">Supervisión Defensiva de Red Local • Kali Linux</div>
+                </div>
+            </div>
+
+            <div class="header-status-group">
+                <span id="header-mode-badge" class="badge-mode read-only">
+                    <span>🛡️</span> Modo Solo Lectura: Activo
+                </span>
+                <span style="font-size: 0.8rem; color: var(--text-secondary); background: var(--bg-surface-elevated); padding: 0.35rem 0.75rem; border-radius: 9999px;" id="header-network-info">
+                    Detectando red...
+                </span>
+                <span style="font-size: 0.8rem; color: var(--text-secondary); background: var(--bg-surface-elevated); padding: 0.35rem 0.75rem; border-radius: 9999px;" id="header-router-driver">
+                    Router: Cargando...
+                </span>
+            </div>
+
+            <div class="header-actions">
+                <button id="btn-scan-now" class="btn btn-primary" title="Escanear la red local ahora">
+                    <span id="scan-btn-icon">🔄</span>
+                    <span>Escanear Ahora</span>
+                </button>
+                <button id="btn-open-history" class="btn" title="Ver historial de conexiones y auditoría">
+                    <span>🕒</span> Historial
+                </button>
+                <button id="btn-open-guide" class="btn" title="Guía de configuración autorizada del router">
+                    <span>📖</span> Guía
+                </button>
+                <button id="btn-open-settings" class="btn" title="Ajustes de MangoRed y credenciales del router">
+                    <span>⚙️</span> Ajustes
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenedor Principal -->
+    <main class="main-content">
+
+        <!-- Métricas Rápidas -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div>
+                    <div class="stat-title">Dispositivos En Línea</div>
+                    <div id="stat-online" class="stat-value" style="color: var(--color-success);">0</div>
+                </div>
+                <div class="stat-icon">🟢</div>
+            </div>
+            <div class="stat-card">
+                <div>
+                    <div class="stat-title">Total Registrados</div>
+                    <div id="stat-total" class="stat-value">0</div>
+                </div>
+                <div class="stat-icon">💻</div>
+            </div>
+            <div class="stat-card">
+                <div>
+                    <div class="stat-title">Nuevos Avisos</div>
+                    <div id="stat-new" class="stat-value" style="color: var(--color-warning);">0</div>
+                </div>
+                <div class="stat-icon">🚨</div>
+            </div>
+            <div class="stat-card">
+                <div>
+                    <div class="stat-title">Bloqueados en Router</div>
+                    <div id="stat-blocked" class="stat-value" style="color: var(--color-danger);">0</div>
+                </div>
+                <div class="stat-icon">⛔</div>
+            </div>
+        </div>
+
+        <!-- Banner de Alerta para Nuevos Dispositivos -->
+        <div id="new-devices-banner" class="new-devices-banner hidden">
+            <div class="banner-content">
+                <span class="banner-icon">⚠️</span>
+                <span id="new-devices-banner-text" style="font-weight: 500;">
+                    ¡Atención! Se han detectado nuevos dispositivos en la red local.
+                </span>
+            </div>
+            <button id="btn-ack-all" class="btn btn-sm" style="background-color: var(--bg-surface);">
+                Marcar Todos como Conocidos
+            </button>
+        </div>
+
+        <!-- Barra de Control: Búsqueda y Filtros -->
+        <div class="controls-bar">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input id="search-input" type="text" class="search-input" placeholder="Buscar por IP, MAC, Hostname, Nombre, Fabricante o Etiqueta...">
+            </div>
+            <div class="filters-group">
+                <button class="filter-pill active" data-filter="all">Todos</button>
+                <button class="filter-pill" data-filter="online">En línea</button>
+                <button class="filter-pill" data-filter="new">Nuevos</button>
+                <button class="filter-pill" data-filter="offline">Desconectados</button>
+                <button class="filter-pill" data-filter="blocked">Bloqueados</button>
+            </div>
+        </div>
+
+        <!-- Tabla de Dispositivos -->
+        <div class="table-container">
+            <table class="devices-table">
+                <thead>
+                    <tr>
+                        <th>Dispositivo / Identificador</th>
+                        <th>Dirección IP</th>
+                        <th>Dirección MAC</th>
+                        <th>Fabricante</th>
+                        <th>Etiquetas</th>
+                        <th>Última Detección</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body">
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                            Iniciando motor de red...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Explicación de Certeza de Datos -->
+        <div style="margin-top: 1.5rem; display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.78rem; color: var(--text-muted); background: var(--bg-surface); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+            <div>
+                <span class="certainty-badge confirmed">Confirmado</span> 
+                <strong>Dato Verificado:</strong> Comprobado directamente en capas de enlace y red mediante paquetes activos ARP/ICMP y tabla de vecinos del kernel.
+            </div>
+            <div>
+                <span class="certainty-badge estimated">Estimado</span> 
+                <strong>Dato Estimado:</strong> Inferencia heurística (resolución DNS/mDNS configurable o coincidencia de prefijo OUI de fabricante que puede variar con MAC aleatoria).
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Contenedor Flotante de Notificaciones (Toasts) -->
+    <div id="toast-container" style="position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; display: flex; flex-direction: column; pointer-events: none;"></div>
+
+    <!-- ==================================================================== -->
+    <!-- MODAL: EDITAR INFORMACIÓN DEL DISPOSITIVO                            -->
+    <!-- ==================================================================== -->
+    <div id="modal-edit-device" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 id="edit-modal-title" class="modal-title">Editar Dispositivo</h3>
+                <button class="btn btn-sm modal-close-btn">✕</button>
+            </div>
+            <form id="form-edit-device">
+                <div class="modal-body">
+                    <input type="hidden" id="edit-mac">
+                    <div class="form-group">
+                        <label class="form-label" for="edit-name">Nombre Personalizado / Alias</label>
+                        <input type="text" id="edit-name" class="form-input" placeholder="Ej: Portátil Trabajo, Bombilla Salón, Móvil...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="edit-tags">Etiquetas (separadas por coma)</label>
+                        <input type="text" id="edit-tags" class="form-input" placeholder="Ej: Trabajo, IoT, Familia, Invitado...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="edit-notes">Notas / Observaciones</label>
+                        <textarea id="edit-notes" class="form-textarea" rows="3" placeholder="Información relevante o ubicación física del equipo..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn modal-close-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar Cambios</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- MODAL: CONFIRMACIÓN DE BLOQUEO ADMINISTRATIVO EN ROUTER             -->
+    <!-- ==================================================================== -->
+    <div id="modal-block-device" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 class="modal-title" style="color: var(--color-danger);">⛔ Bloqueo Administrativo Autorizado</h3>
+                <button class="btn btn-sm modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- Advertencia de Modo Solo Lectura si está activo -->
+                <div id="block-readonly-warning" class="danger-notice-card hidden">
+                    <strong style="color: var(--color-danger);">⚠️ Modo Solo Lectura Activado</strong>
+                    <p style="font-size: 0.85rem; margin-top: 0.25rem; line-height: 1.4;">
+                        MangoRed está protegido en modo de solo lectura. Para aplicar reglas de bloqueo en tu router,
+                        debes desactivar el "Modo Solo Lectura" en la pestaña de Ajustes con tu autorización explícita.
+                    </p>
+                </div>
+
+                <div class="danger-notice-card">
+                    <div style="font-weight: 600; color: var(--color-danger); margin-bottom: 0.5rem;">
+                        Atención: Esta acción restringe el acceso mediante la función oficial del router
+                    </div>
+                    <p style="font-size: 0.85rem; line-height: 1.4; color: var(--text-primary);">
+                        Se solicitará al router la creación de una regla oficial de lista negra (filtro MAC / Firewall)
+                        para cortar el acceso de este dispositivo. No se emplean ataques de desautenticación ni paquetes maliciosos.
+                    </p>
+                </div>
+
+                <div>
+                    <label class="form-label">Dispositivo Objetivo a Bloquear:</label>
+                    <div class="danger-device-preview">
+                        <div><strong>Nombre/Alias:</strong> <span id="block-preview-name">-</span></div>
+                        <div><strong>Dirección IP:</strong> <span id="block-preview-ip">-</span></div>
+                        <div><strong>Dirección MAC:</strong> <span id="block-preview-mac">-</span></div>
+                        <div><strong>Fabricante:</strong> <span id="block-preview-vendor">-</span></div>
+                        <div><strong>Controlador Router:</strong> <span id="block-preview-driver">-</span></div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="block-reason">Motivo del bloqueo (Auditoría interna):</label>
+                    <input type="text" id="block-reason" class="form-input" placeholder="Ej: Dispositivo desconocido no autorizado">
+                </div>
+
+                <label class="form-checkbox-label">
+                    <input type="checkbox" id="block-confirm-checkbox">
+                    <span>Confirmo explícitamente que soy el propietario o administrador autorizado de esta red y deseo revocar el acceso a este dispositivo en el router.</span>
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn modal-close-btn">Cancelar</button>
+                <button type="button" id="btn-confirm-block" class="btn btn-danger">Confirmar Bloqueo Autorizado</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- MODAL: HISTORIAL DE CONEXIONES Y AUDITORÍA                          -->
+    <!-- ==================================================================== -->
+    <div id="modal-history" class="modal-overlay">
+        <div class="modal-box" style="max-width: 750px;">
+            <div class="modal-header">
+                <h3 id="history-modal-title" class="modal-title">Historial de Conexiones</h3>
+                <button class="btn btn-sm modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body" style="padding: 0;">
+                <div id="history-items-list" style="max-height: 60vh; overflow-y: auto; padding: 1rem;">
+                    <!-- Elementos de historial cargados dinámicamente -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn modal-close-btn">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- MODAL: AJUSTES Y CONFIGURACIÓN DEL ROUTER                           -->
+    <!-- ==================================================================== -->
+    <div id="modal-settings" class="modal-overlay">
+        <div class="modal-box" style="max-width: 700px;">
+            <div class="modal-header">
+                <h3 class="modal-title">⚙️ Ajustes de MangoRed</h3>
+                <button class="btn btn-sm modal-close-btn">✕</button>
+            </div>
+            <form id="form-settings">
+                <div class="modal-body">
+
+                    <!-- Sección: Seguridad -->
+                    <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
+                        <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Seguridad y Permisos</h4>
+                        <label class="form-checkbox-label" style="font-weight: 600;">
+                            <input type="checkbox" id="cfg-readonly">
+                            <span>Modo Solo Lectura (Recomendado por defecto). Desmarcar únicamente cuando desees autorizar órdenes administrativas hacia el router.</span>
+                        </label>
+                    </div>
+
+                    <!-- Sección: Escaneo -->
+                    <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
+                        <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Supervisión de Red</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-scan-interval">Intervalo de Escaneo (segundos)</label>
+                                <input type="number" id="cfg-scan-interval" class="form-input" min="5" max="3600">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-interface">Interfaz de Red (dejar vacío para auto)</label>
+                                <input type="text" id="cfg-interface" class="form-input" placeholder="Ej: wlan0, eth0">
+                            </div>
+                        </div>
+                        <label class="form-checkbox-label" style="margin-top: 0.75rem;">
+                            <input type="checkbox" id="cfg-desktop-notifs">
+                            <span>Habilitar notificaciones de escritorio en Kali Linux (notify-send) ante nuevos dispositivos.</span>
+                        </label>
+                    </div>
+
+                    <!-- Sección: Integración con Router -->
+                    <div>
+                        <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Integración con API Oficial del Router</h4>
+                        <div class="form-group" style="margin-bottom: 0.75rem;">
+                            <label class="form-label" for="cfg-router-type">Controlador de Router</label>
+                            <select id="cfg-router-type" class="form-select">
+                                <option value="simulator">Simulador de Laboratorio (Entornos de prueba y routers sin API abierta)</option>
+                                <option value="openwrt">OpenWrt (ubus / LuCI RPC)</option>
+                                <option value="mikrotik">MikroTik (RouterOS v7 REST API)</option>
+                                <option value="generic_webhook">Webhook HTTP Autorizado (Pasarela personal o Home Assistant)</option>
+                            </select>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-router-host">IP / Host del Router</label>
+                                <input type="text" id="cfg-router-host" class="form-input" placeholder="192.168.1.1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-router-port">Puerto</label>
+                                <input type="number" id="cfg-router-port" class="form-input" placeholder="80">
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-router-user">Usuario de Administración</label>
+                                <input type="text" id="cfg-router-user" class="form-input" placeholder="admin">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-router-pass">Contraseña (Protegida chmod 0600)</label>
+                                <input type="password" id="cfg-router-pass" class="form-input" placeholder="••••••••">
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 0.75rem;">
+                            <label class="form-label" for="cfg-router-token">Token API / Clave Bearer (Opcional según modelo)</label>
+                            <input type="password" id="cfg-router-token" class="form-input" placeholder="••••••••">
+                        </div>
+
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 1rem;">
+                            <button type="button" id="btn-test-router" class="btn">
+                                🔌 Probar Conexión con Router
+                            </button>
+                            <div id="router-test-result" style="font-size: 0.8rem;"></div>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn modal-close-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar Ajustes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- MODAL: GUÍA DE CONFIGURACIÓN Y PRINCIPIOS DE SEGURIDAD              -->
+    <!-- ==================================================================== -->
+    <div id="modal-guide" class="modal-overlay">
+        <div class="modal-box" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3 class="modal-title">📖 Guía de Integración y Buenas Prácticas</h3>
+                <button class="btn btn-sm modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="tab-buttons">
+                    <button class="tab-btn guide-tab-btn active" data-tab="ethics_and_security">Ética y Seguridad</button>
+                    <button class="tab-btn guide-tab-btn" data-tab="huawei">Huawei</button>
+                    <button class="tab-btn guide-tab-btn" data-tab="tplink">TP-Link</button>
+                    <button class="tab-btn guide-tab-btn" data-tab="asus">ASUS</button>
+                    <button class="tab-btn guide-tab-btn" data-tab="openwrt">OpenWrt</button>
+                    <button class="tab-btn guide-tab-btn" data-tab="mikrotik">MikroTik</button>
+                </div>
+
+                <div id="guide-tab-content" style="margin-top: 1rem;">
+                    <!-- Contenido renderizado según pestaña activa -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn modal-close-btn">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script del Cliente -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches de pruebas y entornos
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+
+# Base de datos SQLite local (privacidad del inventario de red)
+mangored.db
+mangored.db-wal
+mangored.db-shm
+*.db
+
+# Archivos de configuración local y credenciales de router
+mangored_config.json
+.env
+*.tmp
