@@ -1,207 +1,87 @@
 """
 Motor de Escaneo y Descubrimiento de Red para MangoRed.
-Descubre dispositivos conectados de forma no invasiva, pasiva y
-mediante barrido ARP/ICMP no privilegiado o Scapy.
+
+Descubre dispositivos conectados de forma no invasiva, pasiva y mediante
+lectura de la tabla de vecinos ARP del sistema, complementada con un barrido
+ICMP acotado únicamente dentro de la subred local.
+
+Funciona en Linux, Windows y macOS gracias a :mod:`network_discovery`.
 Garantiza la estricta distinción entre datos confirmados y estimados.
 """
 
-import os
-import re
-import socket
-import subprocess
+from __future__ import annotations
+
 import threading
 import time
-import ipaddress
-import concurrent.futures
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import database
+import device_fingerprint
+import name_resolver
+import network_discovery
 import oui_lookup
-from config import config, validate_ip, validate_mac, normalize_mac
+from config import config, validate_ip, validate_mac
+from platform_compat import PLATFORM_LABEL, send_desktop_notification
+
+#: Estados de la tabla de vecinos que confirman presencia en capa 2.
+CONFIRMED_STATES = frozenset({"REACHABLE", "PERMANENT", "LOCAL_HOST", "STALE", "DELAY"})
+SKIPPED_STATES = frozenset({"FAILED", "INCOMPLETE", "NOARP"})
 
 
-def detect_network_context() -> Dict[str, str]:
+def detect_network_context(preferred_interface: str = "") -> Dict[str, str]:
     """
-    Detecta automáticamente la interfaz predeterminada, IP local,
-    máscara de subred, puerta de enlace y MAC local.
+    Detecta automáticamente la interfaz, IP local, máscara de subred,
+    puerta de enlace y MAC local de forma multiplataforma.
     """
-    context = {
-        "interface": "wlan0",
-        "local_ip": "",
-        "local_mac": "",
-        "subnet": "192.168.1.0/24",
-        "gateway": "192.168.1.1"
-    }
-
-    # 1. Obtener interfaz y gateway predeterminados
-    try:
-        route_out = subprocess.run(["ip", "route"], capture_output=True, text=True, timeout=3)
-        for line in route_out.stdout.splitlines():
-            if line.startswith("default via"):
-                parts = line.split()
-                if len(parts) >= 5:
-                    context["gateway"] = parts[2]
-                    context["interface"] = parts[4]
-                break
-    except Exception as e:
-        print(f"[Scanner Context] Advertencia al obtener ruta: {e}")
-
-    # Si el usuario configuró una interfaz explícita, respetarla
-    if config.interface:
-        context["interface"] = config.interface
-
-    # 2. Obtener IP local y subred de la interfaz
-    try:
-        addr_out = subprocess.run(
-            ["ip", "-o", "-4", "addr", "show", "dev", context["interface"]],
-            capture_output=True, text=True, timeout=3
-        )
-        for line in addr_out.stdout.splitlines():
-            match = re.search(r"inet\s+([0-9\.]+/[0-9]+)", line)
-            if match:
-                cidr_str = match.group(1)
-                net = ipaddress.ip_network(cidr_str, strict=False)
-                context["subnet"] = str(net)
-                context["local_ip"] = cidr_str.split("/")[0]
-                break
-    except Exception as e:
-        print(f"[Scanner Context] Advertencia al obtener subred: {e}")
-
-    # 3. Obtener MAC local
-    try:
-        link_out = subprocess.run(
-            ["ip", "link", "show", "dev", context["interface"]],
-            capture_output=True, text=True, timeout=3
-        )
-        match = re.search(r"link/ether\s+([0-9a-fA-F:]{17})", link_out.stdout)
-        if match:
-            context["local_mac"] = normalize_mac(match.group(1))
-    except Exception as e:
-        print(f"[Scanner Context] Advertencia al obtener MAC local: {e}")
-
+    interface = (preferred_interface or config.interface or "").strip()
+    context = network_discovery.detect_network_context(interface)
+    context["platform"] = PLATFORM_LABEL
     return context
 
 
-def resolve_hostname(ip: str, timeout: float = 0.5) -> str:
+def resolve_names(ips: List[str], timeout: float = 1.2) -> Dict[str, dict]:
     """
-    Intenta resolver el nombre de host mediante DNS inverso / mDNS.
-    Se clasifica SIEMPRE como dato estimado.
+    Resuelve los nombres visibles de los equipos.
+
+    Cascada DNS inverso → NetBIOS → mDNS (configurable en Ajustes). Devuelve
+    ``{ip: {"name": str, "source": "dns"|"netbios"|"mdns"}}``.
+    Siempre es un dato ESTIMADO: el nombre lo declara el propio dispositivo.
     """
+    return name_resolver.resolve_names(
+        ips,
+        timeout=timeout,
+        enable_netbios=config.enable_netbios_lookup,
+        enable_mdns=config.enable_mdns_lookup,
+    )
+
+
+def resolve_hostnames(
+    ips: List[str],
+    timeout: float = 1.2,
+    max_workers: int = 20,
+) -> Dict[str, str]:
+    """Compatibilidad: devuelve ``{ip: nombre}`` para una lista de IPs."""
+    resolved = resolve_names(ips, timeout=timeout)
+    return {ip: info.get("name", "") for ip, info in resolved.items()}
+
+
+def resolve_hostname(ip: str, timeout: float = 1.2) -> str:
+    """Compatibilidad: nombre visible de una única IP (o cadena vacía)."""
     if not validate_ip(ip):
         return ""
-
-    try:
-        # socket.getnameinfo o gethostbyaddr con timeout
-        orig_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(timeout)
-        hostname, _, _ = socket.gethostbyaddr(ip)
-        socket.setdefaulttimeout(orig_timeout)
-        return hostname.strip()
-    except Exception:
-        return ""
+    return resolve_hostnames([ip], timeout=timeout).get(ip, "")
 
 
-def _ping_single_ip(ip_str: str) -> bool:
-    """Envía un ping ICMP único (no privilegiado) con tiempo límite de 1 segundo."""
-    try:
-        res = subprocess.run(
-            ["ping", "-c", "1", "-W", "1", ip_str],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=1.5
-        )
-        return res.returncode == 0
-    except Exception:
-        return False
-
-
-def _trigger_arp_cache_refresh(subnet_cidr: str, max_workers: int = 50):
-    """
-    Realiza un barrido ligero de ping no intrusivo a través de la subred
-    para forzar al kernel a resolver ARP en hosts activos.
-    """
-    try:
-        network = ipaddress.ip_network(subnet_cidr, strict=False)
-        # Limitar barrido a subredes /24 para no sobrecargar
-        hosts = [str(ip) for ip in network.hosts()]
-        if len(hosts) > 512:
-            hosts = hosts[:512]
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            list(executor.map(_ping_single_ip, hosts))
-    except Exception as e:
-        print(f"[Scanner] Error en barrido de caché: {e}")
-
-
-def _parse_kernel_neighbors(interface: str) -> Dict[str, Dict[str, str]]:
-    """
-    Lee las entradas de la tabla de vecinos del kernel (ip neigh y /proc/net/arp).
-    Retorna un diccionario mapeado por IP: {ip: {mac, state}}
-    """
-    neighbors = {}
-
-    # 1. Leer 'ip neigh show dev <interface>'
-    try:
-        cmd = ["ip", "neigh", "show"]
-        if interface:
-            cmd.extend(["dev", interface])
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
-        for line in out.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            # Formato: 192.168.1.12 dev wlan0 lladdr 00:e0:4c:68:2f:f6 REACHABLE
-            if len(parts) >= 4 and "lladdr" in parts:
-                ip = parts[0]
-                lladdr_idx = parts.index("lladdr")
-                if lladdr_idx + 1 < len(parts):
-                    mac = parts[lladdr_idx + 1]
-                    state = parts[-1]
-                    if validate_ip(ip) and validate_mac(mac):
-                        neighbors[ip] = {
-                            "mac": normalize_mac(mac),
-                            "state": state.upper()
-                        }
-    except Exception as e:
-        print(f"[Scanner] Error leyendo ip neigh: {e}")
-
-    # 2. Complementar con /proc/net/arp si no estaba presente
-    try:
-        if os.path.exists("/proc/net/arp"):
-            with open("/proc/net/arp", "r", encoding="utf-8") as f:
-                lines = f.readlines()[1:]  # Omitir cabecera
-                for line in lines:
-                    cols = line.split()
-                    if len(cols) >= 6:
-                        ip = cols[0]
-                        flags = cols[2]
-                        mac = cols[3]
-                        if flags != "0x0" and validate_ip(ip) and validate_mac(mac):
-                            clean_mac = normalize_mac(mac)
-                            if ip not in neighbors:
-                                neighbors[ip] = {
-                                    "mac": clean_mac,
-                                    "state": "REACHABLE"
-                                }
-    except Exception as e:
-        print(f"[Scanner] Error leyendo /proc/net/arp: {e}")
-
-    return neighbors
-
-
-def _send_desktop_notification(title: str, message: str):
-    """Emite una notificación de escritorio en Kali Linux mediante notify-send."""
-    if not config.enable_desktop_notifications:
-        return
-    try:
-        subprocess.Popen(
-            ["notify-send", "-a", "MangoRed", "-u", "critical", "-i", "network-wireless", title, message],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-    except Exception:
-        pass
+def send_new_device_notification(ip: str, mac: str, vendor: str, device_label: str = "") -> bool:
+    """Notifica un dispositivo nuevo en el escritorio (Linux, Windows o macOS)."""
+    details = f"IP: {ip}\nMAC: {mac}\nFabricante est.: {vendor}"
+    if device_label:
+        details += f"\nTipo est.: {device_label}"
+    return send_desktop_notification(
+        "MangoRed: ¡Nuevo dispositivo detectado!",
+        details,
+        enabled=config.enable_desktop_notifications,
+    )
 
 
 class NetworkScannerService:
@@ -211,10 +91,12 @@ class NetworkScannerService:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._scan_lock = threading.Lock()
         self.is_scanning = False
         self.last_scan_time: Optional[float] = None
         self.last_scan_duration: float = 0.0
         self.last_found_count: int = 0
+        self.last_sweep: Dict[str, object] = {}
 
     def start(self):
         """Inicia el hilo de escaneo en segundo plano."""
@@ -222,9 +104,13 @@ class NetworkScannerService:
             if self._running:
                 return
             self._running = True
-            self._thread = threading.Thread(target=self._worker_loop, daemon=True, name="MangoRedScannerThread")
+            self._thread = threading.Thread(
+                target=self._worker_loop,
+                daemon=True,
+                name="MangoRedScannerThread",
+            )
             self._thread.start()
-            print("[Scanner Service] Hilo de supervisión de red iniciado.")
+            print(f"[Scanner Service] Hilo de supervisión iniciado ({PLATFORM_LABEL}).")
 
     def stop(self):
         """Detiene el hilo de escaneo."""
@@ -239,81 +125,123 @@ class NetworkScannerService:
     def _worker_loop(self):
         """Bucle periódico en segundo plano."""
         # Escaneo inicial al arrancar
-        self.execute_scan()
+        try:
+            self.execute_scan()
+        except Exception as error:
+            print(f"[Scanner Service] Error en el escaneo inicial: {error}")
 
         while self._running:
-            interval = max(5, config.scan_interval)
+            interval = max(5, int(config.scan_interval))
             for _ in range(interval):
                 if not self._running:
                     break
                 time.sleep(1)
 
             if self._running and config.auto_scan:
-                self.execute_scan()
+                try:
+                    self.execute_scan()
+                except Exception as error:
+                    print(f"[Scanner Service] Error en escaneo periódico: {error}")
 
     def execute_scan(self) -> dict:
         """
         Ejecuta una ronda completa de descubrimiento y actualización de la red.
+
+        El acceso se serializa con un cerrojo no bloqueante para que dos
+        peticiones simultáneas (botón manual + temporizador) no dupliquen
+        trabajo ni corrompan el inventario.
         """
-        if self.is_scanning:
+        if not self._scan_lock.acquire(blocking=False):
             return {"status": "busy", "message": "Ya hay un escaneo en curso."}
 
         self.is_scanning = True
         start_time = time.time()
-        discovered_devices = []
-        new_devices_found = []
-        seen_macs = []
+        discovered_devices: List[dict] = []
+        new_devices_found: List[dict] = []
+        seen_macs: List[str] = []
 
         try:
-            # 1. Obtener contexto de red
+            # 1. Contexto de red multiplataforma
             net_ctx = detect_network_context()
-            interface = net_ctx["interface"]
-            subnet = net_ctx["subnet"]
-            gateway_ip = net_ctx["gateway"]
-            local_ip = net_ctx["local_ip"]
-            local_mac = net_ctx["local_mac"]
+            interface = net_ctx.get("interface", "")
+            subnet = net_ctx.get("subnet", "")
+            gateway_ip = net_ctx.get("gateway", "")
+            local_ip = net_ctx.get("local_ip", "")
+            local_mac = net_ctx.get("local_mac", "")
 
-            # 2. Refrescar tabla ARP del kernel mediante barrido
-            _trigger_arp_cache_refresh(subnet)
+            # 2. Barrido ICMP acotado (sólo en redes locales) para refrescar ARP
+            sweep = network_discovery.ping_sweep(
+                subnet,
+                max_hosts=config.scan_max_hosts,
+                timeout=1.0,
+            )
+            self.last_sweep = dict(sweep)
 
-            # 3. Leer vecinos identificados por el kernel
-            neighbors = _parse_kernel_neighbors(interface)
+            # 3. Tabla de vecinos del sistema operativo
+            neighbors = network_discovery.read_neighbor_table(interface, subnet)
 
             # 4. Incluir el propio equipo anfitrión si se conoce su IP y MAC
-            if local_ip and local_mac:
-                neighbors[local_ip] = {
-                    "mac": local_mac,
-                    "state": "LOCAL_HOST"
-                }
+            if local_ip and validate_mac(local_mac):
+                neighbors[local_ip] = {"mac": local_mac.lower(), "state": "LOCAL_HOST"}
 
-            # 5. Resolver nombres de host en paralelo
-            hostnames_map = {}
-            ips_to_resolve = list(neighbors.keys())
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                resolved = list(executor.map(resolve_hostname, ips_to_resolve))
-                for ip, hname in zip(ips_to_resolve, resolved):
-                    hostnames_map[ip] = hname
+            # 5. Nombres visibles (DNS → NetBIOS → mDNS) e inventario conocido
+            names_map = resolve_names(list(neighbors.keys()))
+            known_fingerprints = database.get_device_fingerprints(config.db_path)
+            fingerprint_budget = max(0, int(config.fingerprint_max_devices))
 
-            # 6. Procesar y clasificar cada dispositivo
+            # 6. Procesar, identificar y clasificar cada dispositivo
             for ip, info in neighbors.items():
-                mac = info["mac"]
-                state = info["state"]
+                mac = info.get("mac", "")
+                state = str(info.get("state", "REACHABLE")).upper()
 
-                # Omitir entradas fallidas del kernel
-                if state in ["FAILED", "INCOMPLETE"]:
+                if state in SKIPPED_STATES or not validate_mac(mac):
                     continue
 
                 seen_macs.append(mac)
-                hostname = hostnames_map.get(ip, "")
+                name_info = names_map.get(ip, {}) or {}
+                hostname = name_info.get("name", "") or ""
+                name_source = name_info.get("source", "") or ""
+                model = name_info.get("model", "") or ""
+                mdns_services = name_info.get("services", []) or []
                 oui_info = oui_lookup.lookup_vendor(mac)
                 vendor_name = oui_info["vendor"]
 
-                # Clasificación de certeza de datos:
-                # - IP y MAC confirmadas por respuesta ARP/ICMP a nivel de enlace de datos
-                # - Hostname y Fabricante son estimaciones heurísticas
-                is_confirmed_link = state in ["REACHABLE", "PERMANENT", "LOCAL_HOST"]
+                # Certeza de datos:
+                #  - IP y MAC: confirmadas por la tabla de vecinos del kernel
+                #  - Hostname, fabricante y tipo: estimaciones heurísticas
+                is_confirmed_link = state in CONFIRMED_STATES
 
-                # Etiquetado descriptivo por defecto para router y host local
+                # Huella del dispositivo: se repite sólo para equipos nuevos o
+                # aún sin clasificar, y con un presupuesto máximo por escaneo.
+                known = known_fingerprints.get(mac, {})
+                needs_fingerprint = (
+                    fingerprint_budget > 0
+                    and known.get("device_type") in (None, "", "unknown")
+                )
+                if needs_fingerprint:
+                    fingerprint = device_fingerprint.fingerprint_device(
+                        ip,
+                        hostname=hostname,
+                        vendor=vendor_name,
+                        is_gateway=(ip == gateway_ip),
+                        is_local=(ip == local_ip),
+                        local_os=PLATFORM_LABEL,
+                        model=model,
+                        mdns_services=mdns_services,
+                        detect_services=config.enable_service_detection,
+                    )
+                    fingerprint_budget -= 1
+                else:
+                    fingerprint = device_fingerprint.classify_device(
+                        hostname=hostname,
+                        vendor=vendor_name,
+                        is_gateway=(ip == gateway_ip),
+                        is_local=(ip == local_ip),
+                        local_os=PLATFORM_LABEL,
+                        model=model,
+                        mdns_services=mdns_services,
+                    )
+
                 custom_name_hint = ""
                 custom_tags_hint = ""
                 notes_hint = ""
@@ -323,28 +251,31 @@ class NetworkScannerService:
                     custom_tags_hint = "Router,Infraestructura"
                     notes_hint = "Dispositivo de administración de red local (Gateway predeterminado)"
                 elif ip == local_ip:
-                    custom_name_hint = "Mi Equipo (Kali Linux)"
+                    custom_name_hint = "Mi Equipo (MangoRed)"
                     custom_tags_hint = "Administrador,Local"
                     notes_hint = "Equipo actual desde donde se ejecuta MangoRed"
-
-                status_val = "online" if is_confirmed_link else "stale"
 
                 device_payload = {
                     "mac": mac,
                     "ip": ip,
                     "hostname": hostname,
                     "vendor": vendor_name,
-                    "status": status_val,
+                    "status": "online" if is_confirmed_link else "stale",
                     "ip_confirmed": is_confirmed_link,
                     "mac_confirmed": is_confirmed_link,
-                    "hostname_confirmed": False,   # Estimación DNS
-                    "vendor_confirmed": False      # Estimación OUI
+                    "hostname_confirmed": False,   # Estimación (DNS/NetBIOS/mDNS)
+                    "vendor_confirmed": False,     # Estimación OUI
+                    "device_type": fingerprint["device_type"],
+                    "device_type_confidence": fingerprint["confidence"],
+                    "device_evidence": fingerprint["evidence"],
+                    "os_guess": fingerprint["os_guess"],
+                    "services": ", ".join(fingerprint.get("services", [])),
+                    "name_source": name_source,
+                    "model": model,
                 }
 
-                # Guardar en base de datos
                 dev_record, is_first_seen = database.upsert_device(config.db_path, device_payload)
 
-                # Si es un dispositivo nuevo y tiene sugerencias de nombre (ej. Gateway o Local Host), asignarlas
                 if is_first_seen and (custom_name_hint or custom_tags_hint):
                     database.update_device_custom_info(
                         config.db_path, mac, custom_name_hint, custom_tags_hint, notes_hint
@@ -356,14 +287,16 @@ class NetworkScannerService:
 
                 if is_first_seen:
                     new_devices_found.append(dev_record)
-                    # Notificación de escritorio si está habilitada
-                    _send_desktop_notification(
-                        "MangoRed: ¡Nuevo dispositivo detectado!",
-                        f"IP: {ip}\nMAC: {mac}\nFabricante est.: {vendor_name}"
+                    send_new_device_notification(
+                        ip, mac, vendor_name, fingerprint.get("device_type_label", "")
                     )
 
             # 7. Actualizar estado offline de los dispositivos ausentes
-            database.mark_offline_unseen(config.db_path, seen_macs, timeout_seconds=max(60, config.scan_interval * 2))
+            database.mark_offline_unseen(
+                config.db_path,
+                seen_macs,
+                timeout_seconds=max(60, int(config.scan_interval) * 2),
+            )
 
             elapsed = round(time.time() - start_time, 2)
             self.last_scan_time = time.time()
@@ -375,17 +308,20 @@ class NetworkScannerService:
                 "devices_found": len(discovered_devices),
                 "new_devices_count": len(new_devices_found),
                 "duration_seconds": elapsed,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_scan_time))
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_scan_time)),
+                "platform": PLATFORM_LABEL,
+                "sweep": dict(sweep),
             }
 
-        except Exception as e:
-            print(f"[Scanner Service] Error durante la ejecución del escaneo: {e}")
+        except Exception as error:
+            print(f"[Scanner Service] Error durante la ejecución del escaneo: {error}")
             return {
                 "status": "error",
-                "message": f"Fallo al ejecutar el escaneo: {str(e)}"
+                "message": f"Fallo al ejecutar el escaneo: {error}",
             }
         finally:
             self.is_scanning = False
+            self._scan_lock.release()
 
 
 # Instancia global del servicio

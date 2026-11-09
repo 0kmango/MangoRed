@@ -1,20 +1,96 @@
 /**
  * MangoRed - Lógica de Interfaz de Usuario y Cliente REST
- * Supervisión de red local autorizada para Kali Linux
+ * Supervisión de red local autorizada (Linux, Windows y macOS)
  */
+
+// Token local anti-CSRF inyectado por el servidor en el propio documento.
+const API_TOKEN = (document.querySelector('meta[name="mangored-api-token"]') || {}).content || "";
+
+/**
+ * Envoltorio de fetch que añade el token de API, controla respuestas de error
+ * y evita mostrar JSON crudo al usuario.
+ */
+async function apiFetch(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign({}, options.headers || {});
+    if (API_TOKEN) {
+        opts.headers["X-MangoRed-Token"] = API_TOKEN;
+    }
+    opts.headers["Accept"] = opts.headers["Accept"] || "application/json";
+    opts.credentials = "same-origin";
+
+    const response = await window.fetch(url, opts);
+
+    if (!response.ok) {
+        // Si el servidor envía un mensaje concreto, lo muestra el llamador:
+        // así no se duplica el aviso ni se dice "revisa el log" sin motivo.
+        let detail = "";
+        try {
+            if ((response.headers.get("content-type") || "").includes("application/json")) {
+                const data = await response.clone().json();
+                detail = (data && (data.error || data.message)) || "";
+            }
+        } catch (err) {
+            detail = "";
+        }
+
+        if (response.status === 429) {
+            showToast("Demasiadas peticiones",
+                detail || "Espera unos segundos antes de volver a intentarlo.", "warning");
+        } else if (!detail && response.status >= 500) {
+            showToast("Error del servidor",
+                `MangoRed devolvió HTTP ${response.status}. Revisa el log del proceso.`, "danger");
+        } else if (!detail && (response.status === 401 || response.status === 403)) {
+            showToast("Acceso denegado",
+                "La sesión del panel no es válida. Recarga el panel en el navegador local.", "danger");
+        }
+    }
+
+    return response;
+}
 
 // Estado global de la aplicación
 const state = {
     devices: [],
     stats: {},
     config: {},
+    interfaces: [],
     activeStatusFilter: "all",
+    deviceTypeFilter: "",
     searchQuery: "",
     activeTagFilter: "",
     selectedDeviceForBlock: null,
     selectedDeviceForEdit: null,
     isScanning: false,
-    pollTimer: null
+    pollTimer: null,
+    eventTimer: null,
+    lastEventId: 0
+};
+
+// Iconos y etiquetas de origen del nombre (los datos reales llegan del servidor)
+const DEVICE_TYPE_ICONS = {
+    smartphone: "📱",
+    tablet: "📲",
+    laptop: "💻",
+    desktop: "🖥️",
+    computer: "💻",
+    server: "🗄️",
+    router: "📡",
+    printer: "🖨️",
+    tv: "📺",
+    console: "🎮",
+    camera: "📷",
+    nas: "💾",
+    iot: "🔌",
+    wearable: "⌚",
+    vm: "🧩",
+    unknown: "❓"
+};
+
+const NAME_SOURCE_LABELS = {
+    dns: "DNS",
+    netbios: "NetBIOS",
+    mdns: "mDNS"
 };
 
 // Inicialización al cargar el DOM
@@ -28,6 +104,7 @@ async function initApp() {
     await loadStats();
     await loadDevices();
     await loadGuide();
+    await loadInterfaces();
 
     // Polling regular cada 8 segundos para mantener la interfaz actualizada
     state.pollTimer = setInterval(async () => {
@@ -36,6 +113,13 @@ async function initApp() {
             await loadDevices(false);
         }
     }, 8000);
+
+    // Vigilancia en tiempo real: cada 2 s se piden los eventos nuevos
+    startEventStream();
+    state.eventTimer = setInterval(startEventStream, 2000);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") startEventStream();
+    });
 }
 
 function setupEventListeners() {
@@ -57,6 +141,15 @@ function setupEventListeners() {
             renderDevices();
         });
     });
+
+    // Filtro por tipo de dispositivo detectado
+    const typeFilter = document.getElementById("type-filter");
+    if (typeFilter) {
+        typeFilter.addEventListener("change", (event) => {
+            state.deviceTypeFilter = event.target.value;
+            renderDevices();
+        });
+    }
 
     // Botón Escanear Ahora
     const scanBtn = document.getElementById("btn-scan-now");
@@ -93,6 +186,27 @@ function setupEventListeners() {
     document.getElementById("form-settings")?.addEventListener("submit", handleSaveSettings);
     document.getElementById("btn-test-router")?.addEventListener("click", handleTestRouterConnection);
     document.getElementById("btn-confirm-block")?.addEventListener("click", handleExecuteBlock);
+    document.getElementById("cfg-browser-notifs")?.addEventListener("change", (event) => {
+        toggleBrowserNotifications(event.target.checked);
+    });
+
+    // Delegación de eventos para las acciones de cada fila del inventario.
+    // Evita usar atributos onclick inline (compatibles con una CSP estricta).
+    const devicesBody = document.getElementById("devices-table-body");
+    if (devicesBody) {
+        devicesBody.addEventListener("click", (event) => {
+            const button = event.target.closest("button[data-action]");
+            if (!button) return;
+            const mac = button.dataset.mac;
+            const action = button.dataset.action;
+            if (!mac) return;
+
+            if (action === "edit") openEditModal(mac);
+            else if (action === "history") openHistoryModal(mac);
+            else if (action === "block") openBlockModal(mac);
+            else if (action === "unblock") handleUnblockClick(mac);
+        });
+    }
 }
 
 // ============================================================================
@@ -101,7 +215,7 @@ function setupEventListeners() {
 
 async function loadConfig() {
     try {
-        const res = await fetch("/api/config");
+        const res = await apiFetch("/api/config");
         const data = await res.json();
         if (data.success) {
             state.config = data.config;
@@ -112,9 +226,122 @@ async function loadConfig() {
     }
 }
 
+async function loadInterfaces() {
+    const datalist = document.getElementById("interfaces-datalist");
+    if (!datalist) return;
+
+    try {
+        const res = await apiFetch("/api/interfaces");
+        const data = await res.json();
+        if (!data.success) return;
+
+        state.interfaces = data.interfaces || [];
+        datalist.innerHTML = state.interfaces
+            .map(iface => {
+                const label = [iface.name, iface.ip ? `(${iface.ip})` : ""].join(" ").trim();
+                return `<option value="${escapeHtml(iface.name)}">${escapeHtml(label)}</option>`;
+            })
+            .join("");
+    } catch (err) {
+        console.error("Error al listar interfaces de red:", err);
+    }
+}
+
+// ============================================================================
+// VIGILANCIA EN TIEMPO REAL (conexión / desconexión)
+// ============================================================================
+
+async function startEventStream() {
+    if (document.visibilityState === "hidden") return;
+    try {
+        const res = await apiFetch(`/api/events?since=${state.lastEventId}`);
+        const data = await res.json();
+        if (!data.success) return;
+
+        updateLiveIndicator(data.watcher);
+        if (typeof data.latest === "number") state.lastEventId = data.latest;
+
+        if (data.events && data.events.length) {
+            for (const event of data.events) {
+                showDeviceEvent(event);
+            }
+            await loadStats();
+            await loadDevices(false);
+        }
+    } catch (err) {
+        // Silencioso: se reintenta en 2 segundos
+    }
+}
+
+function eventTitle(event) {
+    if (event.type === "new_device") return "Nuevo dispositivo en la red";
+    if (event.type === "connected") return "Dispositivo conectado";
+    if (event.type === "disconnected") return "Dispositivo desconectado";
+    return "Evento de red";
+}
+
+function showDeviceEvent(event) {
+    const type = event.severity === "danger" ? "danger"
+        : event.severity === "warning" ? "warning" : "success";
+    showToast(eventTitle(event), event.message, type);
+    notifyBrowser(event);
+}
+
+function notifyBrowser(event) {
+    if (localStorage.getItem("mangored-browser-notifs") !== "1") return;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+        new Notification(`MangoRed · ${eventTitle(event)}`, {
+            body: event.message,
+            tag: `${event.mac}-${event.type}`
+        });
+    } catch (err) {
+        console.debug("Notificación del navegador no disponible:", err);
+    }
+}
+
+function updateLiveIndicator(watcher) {
+    const text = document.getElementById("live-text");
+    const dot = document.getElementById("live-dot");
+    const chip = document.getElementById("header-live");
+    if (!text || !dot) return;
+
+    if (watcher && watcher.running) {
+        text.textContent = `En vivo · ${watcher.interval}s`;
+        dot.style.color = "var(--color-success)";
+        if (chip) {
+            chip.title = `Vigilancia activa: ${watcher.known_devices} equipos conocidos, `
+                + `${watcher.poll_count} sondeos`;
+        }
+    } else {
+        text.textContent = "Vigilancia inactiva";
+        dot.style.color = "var(--text-muted)";
+        if (chip) chip.title = "La vigilancia en tiempo real está detenida";
+    }
+}
+
+async function toggleBrowserNotifications(enabled) {
+    if (!enabled) {
+        localStorage.setItem("mangored-browser-notifs", "0");
+        return;
+    }
+    if (!("Notification" in window)) {
+        showToast("No disponible", "Este navegador no soporta notificaciones.", "danger");
+        return;
+    }
+    const permission = await Notification.requestPermission();
+    localStorage.setItem("mangored-browser-notifs", permission === "granted" ? "1" : "0");
+    if (permission === "granted") {
+        showToast("Notificaciones activadas",
+            "Recibirás avisos al conectarse o desconectarse un equipo.", "success");
+    } else {
+        showToast("Permiso denegado", "El navegador no permitió las notificaciones.", "danger");
+    }
+}
+
 async function loadStats() {
     try {
-        const res = await fetch("/api/stats");
+        const res = await apiFetch("/api/stats");
         const data = await res.json();
         if (data.success) {
             state.stats = data.stats;
@@ -157,7 +384,7 @@ async function loadDevices(showLoading = true) {
     }
 
     try {
-        const res = await fetch("/api/devices");
+        const res = await apiFetch("/api/devices");
         const data = await res.json();
         if (data.success) {
             state.devices = data.devices;
@@ -197,6 +424,18 @@ function renderDevices() {
         if (state.activeStatusFilter === "offline" && (dev.status !== "offline" || dev.is_blocked)) return false;
         if (state.activeStatusFilter === "new" && !dev.is_new) return false;
         if (state.activeStatusFilter === "blocked" && !dev.is_blocked) return false;
+
+        // Filtro por tipo de dispositivo detectado
+        if (state.deviceTypeFilter) {
+            const type = dev.device_type || "unknown";
+            if (state.deviceTypeFilter === "computer") {
+                if (!["computer", "desktop", "laptop", "server"].includes(type)) return false;
+            } else if (state.deviceTypeFilter === "iot") {
+                if (!["iot", "wearable"].includes(type)) return false;
+            } else if (state.deviceTypeFilter !== type) {
+                return false;
+            }
+        }
 
         // Búsqueda por texto (IP, MAC, Hostname, Nombre, Fabricante, Etiquetas)
         if (state.searchQuery) {
@@ -240,6 +479,23 @@ function renderDevices() {
         const hasCustomName = Boolean(dev.custom_name);
         const hostnameText = dev.hostname ? dev.hostname : "No disponible";
 
+        // Tipo de dispositivo estimado (móvil, ordenador, router…)
+        const typeKey = dev.device_type || "unknown";
+        const typeIcon = DEVICE_TYPE_ICONS[typeKey] || "❓";
+        const typeLabel = dev.device_type_label || "Desconocido";
+        const typeEvidenceParts = (dev.device_evidence || "").split("|").map(t => t.trim()).filter(Boolean);
+        if (dev.services) typeEvidenceParts.push(`Puertos: ${dev.services}`);
+        if (dev.model) typeEvidenceParts.push(`Modelo: ${dev.model}`);
+        const typeEvidence = typeEvidenceParts.join(" · ");
+        const modelSuffix = dev.model ? ` · ${escapeHtml(dev.model)}` : "";
+        const typeBadge = `<span class="device-type-badge" title="${escapeHtml(typeEvidence || 'Sin evidencia suficiente')}">${typeIcon} ${escapeHtml(typeLabel)}${dev.os_guess ? ' · ' + escapeHtml(dev.os_guess) : ''}${modelSuffix}</span>`;
+
+        // Origen del nombre visible (DNS, NetBIOS o mDNS)
+        const sourceLabel = NAME_SOURCE_LABELS[dev.name_source] || "";
+        const sourceBadge = sourceLabel
+            ? `<span class="certainty-badge estimated" title="Nombre declarado por el propio dispositivo vía ${sourceLabel}. Puede ser modificado o estar ausente.">Estimado (${sourceLabel})</span>`
+            : `<span class="certainty-badge estimated" title="Resuelto vía DNS PTR o mDNS. Puede ser modificado por el propio dispositivo.">Estimado (DNS)</span>`;
+
         // Insignia de nuevo dispositivo
         const newBadgeHtml = dev.is_new 
             ? `<span class="new-badge" title="Dispositivo recién detectado">NUEVO</span>` 
@@ -260,9 +516,10 @@ function renderDevices() {
                         <span class="status-dot ${statusClass}" title="${statusLabel}"></span>
                         <div>
                             <strong>${escapeHtml(displayName)}</strong> ${newBadgeHtml}
+                            <div style="margin-top: 3px;">${typeBadge}</div>
                             <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
-                                Hostname: <span style="font-family: monospace;">${escapeHtml(hostnameText)}</span>
-                                <span class="certainty-badge estimated" title="Resuelto vía DNS PTR o mDNS. Puede ser modificado por el propio dispositivo.">Estimado (DNS)</span>
+                                Nombre: <span style="font-family: monospace;">${escapeHtml(hostnameText)}</span>
+                                ${sourceBadge}
                             </div>
                         </div>
                     </div>
@@ -287,17 +544,17 @@ function renderDevices() {
                 </td>
                 <td>
                     <div style="display: flex; gap: 0.35rem; align-items: center;">
-                        <button class="btn btn-sm" onclick="openEditModal('${dev.mac}')" title="Asignar nombre, etiquetas y notas">
+                        <button class="btn btn-sm" data-action="edit" data-mac="${escapeHtml(dev.mac)}" title="Asignar nombre, etiquetas y notas">
                             ✏️ Editar
                         </button>
-                        <button class="btn btn-sm" onclick="openHistoryModal('${dev.mac}')" title="Ver historial de conexiones">
+                        <button class="btn btn-sm" data-action="history" data-mac="${escapeHtml(dev.mac)}" title="Ver historial de conexiones">
                             🕒 Historial
                         </button>
                         ${dev.is_blocked 
-                            ? `<button class="btn btn-sm btn-primary" onclick="handleUnblockClick('${dev.mac}')" title="Desbloquear en el router">
+                            ? `<button class="btn btn-sm btn-primary" data-action="unblock" data-mac="${escapeHtml(dev.mac)}" title="Desbloquear en el router">
                                  🔓 Desbloquear
                                </button>`
-                            : `<button class="btn btn-sm btn-danger" onclick="openBlockModal('${dev.mac}')" title="Bloquear mediante API del router">
+                            : `<button class="btn btn-sm btn-danger" data-action="block" data-mac="${escapeHtml(dev.mac)}" title="Bloquear mediante API del router">
                                  ⛔ Bloquear
                                </button>`
                         }
@@ -323,7 +580,7 @@ async function triggerScan() {
     scanBtn.querySelector("span:last-child").textContent = "Escaneando...";
 
     try {
-        const res = await fetch("/api/scan", { method: "POST" });
+        const res = await apiFetch("/api/scan", { method: "POST" });
         const data = await res.json();
         if (data.success) {
             await loadStats();
@@ -344,7 +601,7 @@ async function triggerScan() {
 
 async function acknowledgeAllNewDevices() {
     try {
-        const res = await fetch("/api/devices/acknowledge-all", { method: "POST" });
+        const res = await apiFetch("/api/devices/acknowledge-all", { method: "POST" });
         const data = await res.json();
         if (data.success) {
             await loadStats();
@@ -384,7 +641,7 @@ async function handleSaveDeviceCustom(e) {
     const notes = document.getElementById("edit-notes").value.trim();
 
     try {
-        const res = await fetch(`/api/devices/${encodeURIComponent(mac)}/custom`, {
+        const res = await apiFetch(`/api/devices/${encodeURIComponent(mac)}/custom`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ custom_name, custom_tags, notes })
@@ -422,6 +679,19 @@ function openBlockModal(mac) {
 
     // Mostrar controlador de router que se invocará
     document.getElementById("block-preview-driver").textContent = state.config.router_type.toUpperCase();
+
+    // Explicar el efecto real de la operación
+    const routerReady = Boolean(state.config.router_host);
+    const blockMode = state.config.router_block_mode || "full";
+    let effect;
+    if (!routerReady) {
+        effect = "No hay router configurado. Indica la IP y las credenciales en Ajustes para que el bloqueo sea real.";
+    } else if (blockMode === "full") {
+        effect = "REAL: se expulsará al equipo del Wi-Fi (lista MAC del punto de acceso) y se le cortará el acceso a Internet.";
+    } else {
+        effect = "REAL: se cortará su acceso a Internet a través del router; seguirá conectado al Wi-Fi.";
+    }
+    document.getElementById("block-preview-effect").textContent = effect;
 
     // Comprobación de Modo Solo Lectura
     const readOnlyWarning = document.getElementById("block-readonly-warning");
@@ -462,7 +732,7 @@ async function handleExecuteBlock() {
     confirmBtn.textContent = "Aplicando en Router...";
 
     try {
-        const res = await fetch("/api/router/block", {
+        const res = await apiFetch("/api/router/block", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -503,7 +773,7 @@ async function handleUnblockClick(mac) {
     }
 
     try {
-        const res = await fetch("/api/router/unblock", {
+        const res = await apiFetch("/api/router/unblock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mac: mac })
@@ -539,7 +809,7 @@ async function openHistoryModal(macFilter = null) {
         let url = "/api/history?limit=150";
         if (macFilter) url += `&mac=${encodeURIComponent(macFilter)}`;
 
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         const data = await res.json();
 
         if (data.success && data.history.length > 0) {
@@ -583,11 +853,27 @@ async function openHistoryModal(macFilter = null) {
 function openSettingsModal() {
     document.getElementById("cfg-readonly").checked = state.config.read_only;
     document.getElementById("cfg-scan-interval").value = state.config.scan_interval || 30;
+    document.getElementById("cfg-scan-max-hosts").value = state.config.scan_max_hosts || 512;
     document.getElementById("cfg-interface").value = state.config.interface || "";
+    document.getElementById("cfg-service-detection").checked = state.config.enable_service_detection !== false;
+    document.getElementById("cfg-netbios-lookup").checked = state.config.enable_netbios_lookup !== false;
+    document.getElementById("cfg-mdns-lookup").checked = state.config.enable_mdns_lookup !== false;
+    document.getElementById("cfg-fingerprint-max").value = state.config.fingerprint_max_devices || 32;
+    document.getElementById("cfg-watch-interval").value = state.config.watch_interval || 5;
+    document.getElementById("cfg-disconnect-grace").value = state.config.disconnect_grace || 60;
+    document.getElementById("cfg-authorization").checked = state.config.authorization_confirmed === true;
+    document.getElementById("cfg-browser-notifs").checked =
+        localStorage.getItem("mangored-browser-notifs") === "1";
+    document.getElementById("cfg-ssh-port").value = state.config.router_ssh_port || 22;
+    document.getElementById("cfg-ssh-profile").value = state.config.router_ssh_profile || "openwrt";
+    document.getElementById("cfg-ssh-key").value = state.config.router_ssh_key || "";
+    document.getElementById("cfg-ssh-accept-key").checked =
+        state.config.router_ssh_accept_new_host_key === true;
     document.getElementById("cfg-desktop-notifs").checked = state.config.enable_desktop_notifications !== false;
 
     // Configuración del router
-    document.getElementById("cfg-router-type").value = state.config.router_type || "simulator";
+    document.getElementById("cfg-router-type").value = state.config.router_type || "ssh";
+    document.getElementById("cfg-block-mode").value = state.config.router_block_mode || "full";
     document.getElementById("cfg-router-host").value = state.config.router_host || "192.168.1.1";
     document.getElementById("cfg-router-port").value = state.config.router_port || 80;
     document.getElementById("cfg-router-user").value = state.config.router_user || "admin";
@@ -603,9 +889,22 @@ async function handleSaveSettings(e) {
     const payload = {
         read_only: document.getElementById("cfg-readonly").checked,
         scan_interval: parseInt(document.getElementById("cfg-scan-interval").value, 10),
+        scan_max_hosts: parseInt(document.getElementById("cfg-scan-max-hosts").value, 10),
         interface: document.getElementById("cfg-interface").value.trim(),
+        enable_service_detection: document.getElementById("cfg-service-detection").checked,
+        enable_netbios_lookup: document.getElementById("cfg-netbios-lookup").checked,
+        enable_mdns_lookup: document.getElementById("cfg-mdns-lookup").checked,
+        fingerprint_max_devices: parseInt(document.getElementById("cfg-fingerprint-max").value, 10),
+        watch_interval: parseInt(document.getElementById("cfg-watch-interval").value, 10),
+        disconnect_grace: parseInt(document.getElementById("cfg-disconnect-grace").value, 10),
+        authorization_confirmed: document.getElementById("cfg-authorization").checked,
+        router_ssh_port: parseInt(document.getElementById("cfg-ssh-port").value, 10),
+        router_ssh_profile: document.getElementById("cfg-ssh-profile").value,
+        router_ssh_key: document.getElementById("cfg-ssh-key").value.trim(),
+        router_ssh_accept_new_host_key: document.getElementById("cfg-ssh-accept-key").checked,
         enable_desktop_notifications: document.getElementById("cfg-desktop-notifs").checked,
         router_type: document.getElementById("cfg-router-type").value,
+        router_block_mode: document.getElementById("cfg-block-mode").value,
         router_host: document.getElementById("cfg-router-host").value.trim(),
         router_port: parseInt(document.getElementById("cfg-router-port").value, 10),
         router_user: document.getElementById("cfg-router-user").value.trim(),
@@ -614,7 +913,7 @@ async function handleSaveSettings(e) {
     };
 
     try {
-        const res = await fetch("/api/config", {
+        const res = await apiFetch("/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -640,7 +939,7 @@ async function handleTestRouterConnection() {
     statusDiv.style.color = "var(--text-muted)";
 
     try {
-        const res = await fetch("/api/router/test", { method: "POST" });
+        const res = await apiFetch("/api/router/test", { method: "POST" });
         const data = await res.json();
         if (data.success) {
             statusDiv.textContent = `✓ Éxito (${data.driver_name}): ${data.message}`;
@@ -648,6 +947,10 @@ async function handleTestRouterConnection() {
         } else {
             statusDiv.textContent = `✗ Fallo: ${data.message}`;
             statusDiv.style.color = "var(--color-danger)";
+            if (data.diagnostics && !String(data.message).includes("Servicios detectados")) {
+                statusDiv.textContent +=
+                    ` Servicios del router: ${data.diagnostics.open_services}. ${data.diagnostics.suggestion}`;
+            }
         }
     } catch (err) {
         statusDiv.textContent = "✗ Error de red al probar la API del router.";
@@ -663,7 +966,7 @@ let cachedGuide = null;
 
 async function loadGuide() {
     try {
-        const res = await fetch("/api/guide");
+        const res = await apiFetch("/api/guide");
         const data = await res.json();
         if (data.success) {
             cachedGuide = data.guide;

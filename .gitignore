@@ -16,8 +16,19 @@ mangored.db
 mangored.db-wal
 mangored.db-shm
 *.db
+*.db-wal
+*.db-shm
 
 # Archivos de configuración local y credenciales de router
 mangored_config.json
 .env
 *.tmp
+
+# Bases de datos OUI locales (grandes y específicas de cada equipo)
+oui.txt
+nmap-mac-prefixes
+
+# Artefactos del sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini

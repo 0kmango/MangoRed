@@ -15,6 +15,31 @@ class BaseRouterDriver(ABC):
         self.config = config
 
     @property
+    def timeout(self) -> int:
+        """Tiempo máximo de espera por petición (1-30 s), acotado por seguridad."""
+        try:
+            value = int(getattr(self.config, "router_timeout", 5))
+        except (TypeError, ValueError):
+            value = 5
+        return max(1, min(30, value))
+
+    @property
+    def verify_ssl(self) -> bool:
+        """Verificación de certificado TLS según la configuración."""
+        return bool(getattr(self.config, "router_verify_ssl", True))
+
+    @property
+    def base_scheme(self) -> str:
+        return "https" if getattr(self.config, "router_use_https", False) else "http"
+
+    @property
+    def base_url(self) -> str:
+        """URL base ``esquema://host:puerto`` validada a partir de la configuración."""
+        host = str(getattr(self.config, "router_host", "") or "").strip()
+        port = int(getattr(self.config, "router_port", 80) or 80)
+        return f"{self.base_scheme}://{host}:{port}"
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """Nombre legible del controlador."""

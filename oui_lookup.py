@@ -1,11 +1,14 @@
 """
 Módulo de resolución de fabricantes (OUI) a partir de la dirección MAC.
-Utiliza la base de datos local de prefijos IEEE/Nmap en Kali Linux con un
-diccionario de reserva para los fabricantes más comunes.
+
+Utiliza la primera base de datos local de prefijos IEEE/Nmap disponible en el
+sistema (Linux, Windows o macOS) con un diccionario de reserva para los
+fabricantes más comunes.
 """
 
 import os
 import re
+from pathlib import Path
 
 COMMON_OUIs = {
     # Fabricantes comunes y chips de red
@@ -86,8 +89,86 @@ def _normalize_prefix(mac_str: str) -> str:
     return clean[:6] if len(clean) >= 6 else ""
 
 
+def _candidate_oui_paths():
+    """
+    Rutas habituales de las bases de datos OUI en cada sistema operativo.
+
+    Se puede forzar una ruta personalizada con la variable de entorno
+    ``MANGORED_OUI_PATH``.
+    """
+    paths = []
+
+    override = (os.environ.get("MANGORED_OUI_PATH", "") or "").strip()
+    if override:
+        paths.append(override)
+
+    # 1. Base de datos propia dentro del proyecto (si el usuario la coloca ahí)
+    project_dir = Path(__file__).resolve().parent
+    paths.extend([
+        str(project_dir / "oui.txt"),
+        str(project_dir / "nmap-mac-prefixes"),
+    ])
+
+    # 2. Linux (Kali, Debian, Ubuntu, Arch, Fedora...)
+    paths.extend([
+        "/usr/share/nmap/nmap-mac-prefixes",
+        "/usr/share/arp-scan/ieee-oui.txt",
+        "/var/lib/ieee-data/oui.txt",
+        "/usr/share/ieee-data/oui.txt",
+        "/usr/share/wireshark/manuf",
+    ])
+
+    # 3. macOS (Homebrew Intel y Apple Silicon)
+    paths.extend([
+        "/usr/local/share/nmap/nmap-mac-prefixes",
+        "/opt/homebrew/share/nmap/nmap-mac-prefixes",
+        "/opt/local/share/nmap/nmap-mac-prefixes",
+        "/usr/local/share/arp-scan/ieee-oui.txt",
+    ])
+
+    # 4. Windows (Nmap, Wireshark y oui.txt portable)
+    for base_var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        base = os.environ.get(base_var, "") or ""
+        if not base:
+            continue
+        paths.extend([
+            os.path.join(base, "Nmap", "nmap-mac-prefixes"),
+            os.path.join(base, "Wireshark", "manuf"),
+        ])
+
+    return paths
+
+
+def _parse_oui_line(line: str):
+    """
+    Interpreta una línea de base de datos OUI.
+
+    Soporta los formatos de Nmap (``00000C Cisco``), arp-scan
+    (``00:00:0C  Cisco``) e ieee-data (``00-00-0C   (hex)  Cisco``).
+    """
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return None
+
+    parts = text.split(None, 1)
+    if len(parts) != 2:
+        return None
+
+    prefix = _normalize_prefix(parts[0])
+    if len(prefix) != 6:
+        return None
+
+    vendor = parts[1].strip()
+    if vendor.lower().startswith("(hex)"):
+        vendor = vendor[5:].strip()
+    vendor = re.sub(r"\s+", " ", vendor)[:120]
+    if not vendor:
+        return None
+    return prefix, vendor
+
+
 def _load_system_oui_db():
-    """Carga los prefijos OUI desde las bases de datos de Kali Linux."""
+    """Carga los prefijos OUI desde la primera base de datos disponible."""
     global _OUI_CACHE, _DATABASE_LOADED
     if _DATABASE_LOADED:
         return
@@ -98,33 +179,22 @@ def _load_system_oui_db():
         if clean_prefix:
             _OUI_CACHE[clean_prefix] = vendor
 
-    # Buscar bases de datos comunes en Kali Linux
-    candidate_paths = [
-        "/usr/share/nmap/nmap-mac-prefixes",
-        "/usr/share/arp-scan/ieee-oui.txt",
-        "/var/lib/ieee-data/oui.txt"
-    ]
-
-    for path in candidate_paths:
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        
-                        # Formato nmap: 00000C Cisco Systems
-                        parts = line.split(None, 1)
-                        if len(parts) == 2:
-                            prefix = parts[0].strip().upper()
-                            vendor = parts[1].strip()
-                            clean_prefix = _normalize_prefix(prefix)
-                            if len(clean_prefix) == 6 and clean_prefix not in _OUI_CACHE:
-                                _OUI_CACHE[clean_prefix] = vendor
-                break  # Con una base de datos completa es suficiente
-            except Exception:
-                continue
+    for path in _candidate_oui_paths():
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    parsed = _parse_oui_line(line)
+                    if not parsed:
+                        continue
+                    prefix, vendor = parsed
+                    if prefix not in _OUI_CACHE:
+                        _OUI_CACHE[prefix] = vendor
+            # Con una base de datos completa es suficiente
+            break
+        except OSError:
+            continue
 
     _DATABASE_LOADED = True
 

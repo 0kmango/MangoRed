@@ -440,6 +440,22 @@ body {
     margin-right: 0.25rem;
 }
 
+/* Tipo de dispositivo detectado (móvil, ordenador, router… ) */
+.device-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background-color: var(--bg-surface-elevated);
+    border: 1px solid var(--border-highlight);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 9999px;
+    cursor: help;
+    white-space: nowrap;
+}
+
 .new-badge {
     background-color: var(--color-warning);
     color: #000;

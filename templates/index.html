@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MangoRed - Monitor Doméstico de Red Local (Kali Linux)</title>
+    <meta name="mangored-api-token" content="{{ api_token }}">
+    <meta name="referrer" content="no-referrer">
+    <title>MangoRed - Monitor Doméstico de Red Local</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%22><text y=%2226%22 font-size=%2226%22>🥭</text></svg>">
 </head>
@@ -16,11 +18,17 @@
                 <div class="brand-icon">🥭</div>
                 <div>
                     <h1 class="brand-title">MangoRed</h1>
-                    <div class="brand-subtitle">Supervisión Defensiva de Red Local • Kali Linux</div>
+                    <div class="brand-subtitle">
+                        Supervisión Defensiva de Red Local • {{ platform_label }} • v{{ app_version }}
+                    </div>
                 </div>
             </div>
 
             <div class="header-status-group">
+                <span id="header-live" class="badge-mode read-only" title="Vigilancia en tiempo real de conexiones y desconexiones">
+                    <span id="live-dot" style="color: var(--color-success);">●</span>
+                    <span id="live-text">En vivo</span>
+                </span>
                 <span id="header-mode-badge" class="badge-mode read-only">
                     <span>🛡️</span> Modo Solo Lectura: Activo
                 </span>
@@ -111,6 +119,20 @@
                 <button class="filter-pill" data-filter="offline">Desconectados</button>
                 <button class="filter-pill" data-filter="blocked">Bloqueados</button>
             </div>
+            <select id="type-filter" class="form-select" title="Filtrar por tipo de dispositivo detectado" style="max-width: 220px;">
+                <option value="">Todos los tipos</option>
+                <option value="smartphone">📱 Móviles</option>
+                <option value="tablet">📲 Tablets</option>
+                <option value="computer">💻 Ordenadores</option>
+                <option value="router">📡 Routers / AP</option>
+                <option value="printer">🖨️ Impresoras</option>
+                <option value="tv">📺 TVs / Streaming</option>
+                <option value="console">🎮 Consolas</option>
+                <option value="camera">📷 Cámaras IP</option>
+                <option value="nas">💾 NAS</option>
+                <option value="iot">🔌 IoT / Domótica</option>
+                <option value="unknown">❓ Sin identificar</option>
+            </select>
         </div>
 
         <!-- Tabla de Dispositivos -->
@@ -224,6 +246,7 @@
                         <div><strong>Dirección MAC:</strong> <span id="block-preview-mac">-</span></div>
                         <div><strong>Fabricante:</strong> <span id="block-preview-vendor">-</span></div>
                         <div><strong>Controlador Router:</strong> <span id="block-preview-driver">-</span></div>
+                        <div><strong>Efecto:</strong> <span id="block-preview-effect">-</span></div>
                     </div>
                 </div>
 
@@ -288,19 +311,68 @@
                     <!-- Sección: Escaneo -->
                     <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
                         <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Supervisión de Red</h4>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
                             <div class="form-group">
                                 <label class="form-label" for="cfg-scan-interval">Intervalo de Escaneo (segundos)</label>
                                 <input type="number" id="cfg-scan-interval" class="form-input" min="5" max="3600">
                             </div>
                             <div class="form-group">
-                                <label class="form-label" for="cfg-interface">Interfaz de Red (dejar vacío para auto)</label>
-                                <input type="text" id="cfg-interface" class="form-input" placeholder="Ej: wlan0, eth0">
+                                <label class="form-label" for="cfg-scan-max-hosts">Máx. Hosts por Barrido</label>
+                                <input type="number" id="cfg-scan-max-hosts" class="form-input" min="1" max="4096">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-interface">Interfaz de Red (vacío = auto)</label>
+                                <input type="text" id="cfg-interface" class="form-input" list="interfaces-datalist" placeholder="Ej: wlan0, eth0, Wi-Fi">
+                                <datalist id="interfaces-datalist"></datalist>
                             </div>
                         </div>
                         <label class="form-checkbox-label" style="margin-top: 0.75rem;">
                             <input type="checkbox" id="cfg-desktop-notifs">
-                            <span>Habilitar notificaciones de escritorio en Kali Linux (notify-send) ante nuevos dispositivos.</span>
+                            <span>Habilitar notificaciones nativas de escritorio ante nuevos dispositivos (notify-send en Linux, toast en Windows, Centro de notificaciones en macOS).</span>
+                        </label>
+                    </div>
+
+                    <!-- Sección: Reconocimiento de Dispositivos -->
+                    <div style="border-bottom: 1px solid var(--border-color); padding: 1rem 0;">
+                        <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Reconocimiento de Dispositivos</h4>
+                        <label class="form-checkbox-label">
+                            <input type="checkbox" id="cfg-service-detection">
+                            <span><strong>Detectar tipo por puertos abiertos:</strong> prueba una lista corta y fija de servicios (62078 iPhone, 445/3389 Windows, 9100 impresoras…) para identificar móviles, ordenadores, TVs, cámaras, etc.</span>
+                        </label>
+                        <label class="form-checkbox-label" style="margin-top: 0.5rem;">
+                            <input type="checkbox" id="cfg-netbios-lookup">
+                            <span><strong>Buscar nombres por NetBIOS:</strong> obtiene el nombre de equipos Windows (DESKTOP-XXXX, LAPTOP-XXXX) aunque no tengan DNS inverso.</span>
+                        </label>
+                        <label class="form-checkbox-label" style="margin-top: 0.5rem;">
+                            <input type="checkbox" id="cfg-mdns-lookup">
+                            <span><strong>Buscar nombres por mDNS:</strong> obtiene nombres .local de Apple, impresoras e IoT (MacBook-de-Luis.local, impresora.local…).</span>
+                        </label>
+                        <div class="form-group" style="margin-top: 0.75rem; max-width: 260px;">
+                            <label class="form-label" for="cfg-fingerprint-max">Máx. equipos analizados por escaneo</label>
+                            <input type="number" id="cfg-fingerprint-max" class="form-input" min="1" max="256">
+                        </div>
+                    </div>
+
+                    <!-- Sección: Tiempo Real y Autorización -->
+                    <div style="border-bottom: 1px solid var(--border-color); padding: 1rem 0;">
+                        <h4 style="color: var(--brand-primary); margin-bottom: 0.5rem; font-size: 0.95rem;">Tiempo Real y Administración Autorizada</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-watch-interval">Sondeo de conexiones (segundos)</label>
+                                <input type="number" id="cfg-watch-interval" class="form-input" min="2" max="3600">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-disconnect-grace">Gracia antes de "desconectado" (s)</label>
+                                <input type="number" id="cfg-disconnect-grace" class="form-input" min="15" max="3600">
+                            </div>
+                        </div>
+                        <label class="form-checkbox-label" style="margin-top: 0.5rem;">
+                            <input type="checkbox" id="cfg-browser-notifs">
+                            <span>Mostrar también notificaciones del navegador al conectar/desconectar equipos (se pedirá permiso una vez).</span>
+                        </label>
+                        <label class="form-checkbox-label" style="margin-top: 0.75rem; background-color: var(--color-warning-soft); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid rgba(245, 158, 11, 0.4);">
+                            <input type="checkbox" id="cfg-authorization">
+                            <span><strong>Declaración de autorización:</strong> confirmo que soy el propietario o administrador autorizado de esta red y que usaré el bloqueo únicamente en ella. Sin esta casilla, MangoRed no aplica cambios en routers reales.</span>
                         </label>
                     </div>
 
@@ -310,10 +382,18 @@
                         <div class="form-group" style="margin-bottom: 0.75rem;">
                             <label class="form-label" for="cfg-router-type">Controlador de Router</label>
                             <select id="cfg-router-type" class="form-select">
-                                <option value="simulator">Simulador de Laboratorio (Entornos de prueba y routers sin API abierta)</option>
+                                <option value="ssh">SSH del Router (OpenWrt / Linux) — recomendado</option>
                                 <option value="openwrt">OpenWrt (ubus / LuCI RPC)</option>
                                 <option value="mikrotik">MikroTik (RouterOS v7 REST API)</option>
                                 <option value="generic_webhook">Webhook HTTP Autorizado (Pasarela personal o Home Assistant)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 0.75rem;">
+                            <label class="form-label" for="cfg-block-mode">Efecto del bloqueo</label>
+                            <select id="cfg-block-mode" class="form-select">
+                                <option value="full">Desconectar de la red (expulsar del Wi-Fi + cortar Internet)</option>
+                                <option value="internet">Solo cortar Internet (sigue en el Wi-Fi)</option>
                             </select>
                         </div>
 
@@ -342,6 +422,32 @@
                         <div class="form-group" style="margin-bottom: 0.75rem;">
                             <label class="form-label" for="cfg-router-token">Token API / Clave Bearer (Opcional según modelo)</label>
                             <input type="password" id="cfg-router-token" class="form-input" placeholder="••••••••">
+                        </div>
+
+                        <!-- Control por SSH (perfil OpenWrt / iptables) -->
+                        <div id="ssh-settings" style="border: 1px dashed var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem; margin-bottom: 0.75rem;">
+                            <h5 style="font-size: 0.85rem; color: var(--brand-primary); margin-bottom: 0.5rem;">Control por SSH (bloqueo real de Internet)</h5>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label" for="cfg-ssh-port">Puerto SSH</label>
+                                    <input type="number" id="cfg-ssh-port" class="form-input" min="1" max="65535" placeholder="22">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="cfg-ssh-profile">Perfil de comandos</label>
+                                    <select id="cfg-ssh-profile" class="form-select">
+                                        <option value="openwrt">OpenWrt (uci + /etc/config/firewall)</option>
+                                        <option value="iptables">Linux genérico (cadena iptables MANGORED)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="cfg-ssh-key">Clave privada SSH (ruta, opcional)</label>
+                                <input type="text" id="cfg-ssh-key" class="form-input" placeholder="~/.ssh/id_ed25519">
+                            </div>
+                            <label class="form-checkbox-label">
+                                <input type="checkbox" id="cfg-ssh-accept-key">
+                                <span>Aceptar la clave de host SSH si no está en <code>known_hosts</code> (menos seguro; sólo en redes de confianza).</span>
+                            </label>
                         </div>
 
                         <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 1rem;">

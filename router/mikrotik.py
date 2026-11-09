@@ -19,17 +19,28 @@ class MikroTikRouterDriver(BaseRouterDriver):
         return "Integración oficial con routers MikroTik mediante la interfaz REST de RouterOS v7."
 
     def _get_base_url(self) -> str:
-        scheme = "https" if self.config.router_use_https else "http"
-        return f"{scheme}://{self.config.router_host}:{self.config.router_port}/rest"
+        return f"{self.base_url}/rest"
+
+    @property
+    def _auth(self):
+        return (self.config.router_user, self.config.router_password)
+
+    @staticmethod
+    def _short_body(response) -> str:
+        try:
+            return str(response.text or "")[:200]
+        except Exception:
+            return ""
 
     def test_connection(self) -> Tuple[bool, str]:
         url = f"{self._get_base_url()}/system/resource"
         try:
             resp = requests.get(
                 url,
-                auth=(self.config.router_user, self.config.router_password),
-                timeout=5,
-                verify=self.config.router_verify_ssl
+                auth=self._auth,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=False,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -58,14 +69,18 @@ class MikroTikRouterDriver(BaseRouterDriver):
         try:
             resp = requests.put(
                 url,
-                auth=(self.config.router_user, self.config.router_password),
+                auth=self._auth,
                 json=payload,
-                timeout=5,
-                verify=self.config.router_verify_ssl
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=False,
             )
-            if resp.status_code in [200, 201]:
+            if resp.status_code in (200, 201):
                 return True, f"[MikroTik REST] Regla de cortafuegos DROP aplicada para MAC {clean}."
-            return False, f"Error al crear regla en MikroTik: HTTP {resp.status_code} - {resp.text}"
+            return False, (
+                f"Error al crear regla en MikroTik: HTTP {resp.status_code} - "
+                f"{self._short_body(resp)}"
+            )
         except requests.exceptions.RequestException as e:
             return False, f"Error de comunicación con MikroTik: {e}"
 
@@ -77,12 +92,14 @@ class MikroTikRouterDriver(BaseRouterDriver):
         url = f"{self._get_base_url()}/ip/firewall/filter"
         comment = f"mangored_block_{clean}"
         try:
-            # Buscar la regla por comentario
+            # Buscar la regla por comentario (params evita inyección en la query)
             resp = requests.get(
-                f"{url}?comment={comment}",
-                auth=(self.config.router_user, self.config.router_password),
-                timeout=5,
-                verify=self.config.router_verify_ssl
+                url,
+                params={"comment": comment},
+                auth=self._auth,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=False,
             )
             if resp.status_code == 200:
                 rules = resp.json()
@@ -91,9 +108,10 @@ class MikroTikRouterDriver(BaseRouterDriver):
                     if rule_id:
                         del_resp = requests.delete(
                             f"{url}/{rule_id}",
-                            auth=(self.config.router_user, self.config.router_password),
-                            timeout=5,
-                            verify=self.config.router_verify_ssl
+                            auth=self._auth,
+                            timeout=self.timeout,
+                            verify=self.verify_ssl,
+                            allow_redirects=False,
                         )
                         if del_resp.status_code in [200, 204]:
                             return True, f"[MikroTik REST] Regla de bloqueo para {clean} eliminada."
@@ -103,10 +121,15 @@ class MikroTikRouterDriver(BaseRouterDriver):
             return False, f"Error de comunicación con MikroTik: {e}"
 
     def get_capabilities(self) -> Dict[str, Any]:
+        notice = "Habilita la API REST en RouterOS v7 mediante: /ip service enable rest"
+        if not self.config.router_use_https:
+            notice += " (recomendado: usa HTTPS para no enviar credenciales en claro)."
         return {
             "driver": "mikrotik",
             "is_simulated": False,
             "supports_mac_filter": True,
             "supports_schedule": True,
-            "notice": "Habilita la API REST en RouterOS v7 mediante: /ip service enable rest"
+            "timeout_seconds": self.timeout,
+            "tls_verified": self.verify_ssl,
+            "notice": notice,
         }
