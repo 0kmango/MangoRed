@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="mangored-api-token" content="{{ api_token }}">
+    <meta name="referrer" content="no-referrer">
+    <title>Mango LAN Map - Mapa en vivo de tu red local</title>
+    <link rel="stylesheet" href="/static/css/map.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%2275%22 font-size=%2275%22>🗺️</text></svg>">
+</head>
+<body class="map-body">
+
+    <header class="map-header">
+        <div class="map-header-left">
+            <a class="map-back" href="/" title="Volver al panel de MangoRed">← Panel</a>
+            <div class="brand">
+                <span class="brand-icon">🗺️</span>
+                <div>
+                    <h1 class="brand-title">Mango LAN Map</h1>
+                    <div class="brand-subtitle">
+                        Mapa lógico en vivo de tu red local • {{ platform_label }} • v{{ app_version }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="map-header-center">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input id="map-search" type="text" class="search-input"
+                       placeholder="Buscar por nombre, IP, MAC, fabricante o tipo...">
+            </div>
+        </div>
+
+        <div class="map-header-right">
+            <span id="map-live" class="chip" title="Vigilancia en tiempo real">
+                <span id="map-live-dot" class="live-dot">●</span>
+                <span id="map-live-text">En vivo</span>
+            </span>
+            <span class="chip stat" id="chip-online" title="Dispositivos en línea">🟢 0</span>
+            <span class="chip stat" id="chip-total" title="Dispositivos inventariados">💾 0</span>
+            <span class="chip stat" id="chip-new" title="Dispositivos nuevos sin revisar">🚨 0</span>
+            <button id="btn-map-scan" class="btn btn-primary" title="Escanear la red ahora">🔄 Escanear</button>
+            <button id="btn-map-layout" class="btn" title="Recolocar los dispositivos en anillos por tipo">✨ Auto-layout</button>
+            <button id="btn-map-floorplan" class="btn" title="Subir un plano de tu casa como fondo">🖼️ Plano</button>
+            <button id="btn-map-floorplan-clear" class="btn btn-danger-soft hidden" title="Quitar el plano de fondo">🗑️ Quitar plano</button>
+        </div>
+    </header>
+
+    <main class="map-main">
+        <section class="map-canvas-wrapper">
+            <svg id="map-canvas" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"
+                 role="img" aria-label="Mapa de dispositivos de la red local">
+                <defs>
+                    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+                        <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgba(148,163,184,0.12)" stroke-width="1"/>
+                    </pattern>
+                    <radialGradient id="halo-online" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="rgba(16,185,129,0.45)"/>
+                        <stop offset="100%" stop-color="rgba(16,185,129,0)"/>
+                    </radialGradient>
+                    <radialGradient id="halo-offline" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="rgba(100,116,139,0.35)"/>
+                        <stop offset="100%" stop-color="rgba(100,116,139,0)"/>
+                    </radialGradient>
+                </defs>
+
+                <rect x="0" y="0" width="1000" height="1000" fill="url(#grid)"/>
+                <g id="scene">
+                    <image id="floorplan-image" class="hidden" x="0" y="0" width="1000" height="1000"
+                           preserveAspectRatio="none" href=""></image>
+                    <g id="map-rings"></g>
+                    <g id="map-links"></g>
+                    <g id="map-nodes"></g>
+                </g>
+            </svg>
+
+            <div class="map-tools">
+                <button class="tool" id="btn-zoom-in" title="Acercar">＋</button>
+                <button class="tool" id="btn-zoom-out" title="Alejar">－</button>
+                <button class="tool" id="btn-zoom-reset" title="Centrar la vista">⤢</button>
+            </div>
+
+            <div class="map-hint" id="map-hint">
+                Haz clic en un dispositivo para ver sus datos · arrástralo para colocarlo donde quieras ·
+                rueda del ratón para acercar
+            </div>
+
+            <div class="map-legend" id="map-legend">
+                <div class="legend-title">Leyenda</div>
+                <div class="legend-items" id="legend-items"></div>
+                <div class="legend-note">
+                    Mapa <strong>lógico</strong> (posiciones orientativas), no geolocalización.
+                </div>
+            </div>
+        </section>
+
+        <aside class="map-side" id="map-side">
+            <div class="side-empty" id="side-empty">
+                <div class="side-empty-icon">🛰️</div>
+                <p>Ningún dispositivo seleccionado.</p>
+                <p class="side-hint">Los anillos colocan el router en el centro y el resto por tipo.
+                   Arrastra los equipos y pulsa <strong>✨ Auto-layout</strong> para volver al reparto automático.</p>
+            </div>
+            <div class="side-detail hidden" id="side-detail"></div>
+        </aside>
+    </main>
+
+    <input type="file" id="floorplan-input" accept="image/png,image/jpeg" class="hidden">
+    <div id="map-toasts" class="toasts"></div>
+
+    <script src="/static/js/map.js"></script>
+</body>
+</html>

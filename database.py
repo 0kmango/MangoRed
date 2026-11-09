@@ -31,6 +31,9 @@ DEVICE_COLUMN_MIGRATIONS = {
     "services": "TEXT DEFAULT ''",
     "name_source": "TEXT DEFAULT ''",
     "model": "TEXT DEFAULT ''",
+    "map_x": "REAL",
+    "map_y": "REAL",
+    "map_pinned": "INTEGER DEFAULT 0",
 }
 
 
@@ -86,7 +89,15 @@ def init_db(db_path: str):
             device_evidence TEXT DEFAULT '',
             services TEXT DEFAULT '',
             name_source TEXT DEFAULT '',
-            model TEXT DEFAULT ''
+            model TEXT DEFAULT '',
+            map_x REAL,
+            map_y REAL,
+            map_pinned INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS history (
@@ -392,8 +403,7 @@ def get_all_devices(
 
 
 def get_device_fingerprints(db_path: str) -> dict:
-    """
-    Devuelve ``{mac: {"device_type", "confidence"}}`` del inventario.
+    """Devuelve ``{mac: {"device_type", "confidence"}}`` del inventario.
 
     Permite al escáner evitar repetir el análisis de puertos en cada ronda.
     """
@@ -558,3 +568,80 @@ def get_stats(db_path: str) -> dict:
             "blocked_devices": blocked,
             "new_devices_count": new_count
         }
+
+
+# ============================================================================
+# Mango LAN Map: posiciones y metadatos de la aplicación
+# ============================================================================
+
+def set_device_map_position(db_path: str, mac: str, x: float, y: float) -> bool:
+    """
+    Guarda la posición manual de un dispositivo en el mapa (0-100 %).
+
+    Devuelve ``False`` si la MAC o las coordenadas no son válidas.
+    """
+    if not validate_mac(mac):
+        return False
+    try:
+        pos_x, pos_y = float(x), float(y)
+    except (TypeError, ValueError):
+        return False
+    if not (0.0 <= pos_x <= 100.0 and 0.0 <= pos_y <= 100.0):
+        return False
+
+    clean_mac = normalize_mac(mac)
+    with get_db_connection(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE devices SET map_x = ?, map_y = ?, map_pinned = 1 WHERE mac = ?",
+            (round(pos_x, 2), round(pos_y, 2), clean_mac),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def reset_map_positions(db_path: str, mac: Optional[str] = None) -> int:
+    """
+    Elimina las posiciones manuales (de un equipo o de todos) para que vuelvan
+    al layout automático.
+    """
+    with get_db_connection(db_path) as conn:
+        if mac and validate_mac(mac):
+            cursor = conn.execute(
+                "UPDATE devices SET map_x = NULL, map_y = NULL, map_pinned = 0 "
+                "WHERE mac = ? AND map_pinned = 1",
+                (normalize_mac(mac),),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE devices SET map_x = NULL, map_y = NULL, map_pinned = 0 "
+                "WHERE map_pinned = 1"
+            )
+        conn.commit()
+        return cursor.rowcount
+
+
+def set_meta(db_path: str, key: str, value: str) -> None:
+    """Guarda un valor de metadatos de la aplicación (p. ej. el plano de planta)."""
+    with get_db_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_clean_text(key, 64), _clean_text(value, 512)),
+        )
+        conn.commit()
+
+
+def get_meta(db_path: str, key: str, default: str = "") -> str:
+    """Lee un valor de metadatos de la aplicación."""
+    with get_db_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM app_meta WHERE key = ?", (_clean_text(key, 64),)
+        ).fetchone()
+        return row["value"] if row else default
+
+
+def delete_meta(db_path: str, key: str) -> None:
+    """Elimina un metadato de la aplicación."""
+    with get_db_connection(db_path) as conn:
+        conn.execute("DELETE FROM app_meta WHERE key = ?", (_clean_text(key, 64),))
+        conn.commit()

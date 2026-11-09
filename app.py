@@ -21,16 +21,18 @@ import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 from typing import Optional
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import database
+import map_layout
 import network_discovery
 import scanner
 from config import config, validate_mac
 from event_watcher import device_watcher
-from platform_compat import PLATFORM_LABEL, list_platform_tools
+from platform_compat import PLATFORM_LABEL, list_platform_tools, secure_file_permissions
 from router import ROUTER_SETUP_GUIDE, get_router_driver
 from router.ssh_router import describe_open_ports, probe_router_ports, suggest_router_action
 from security import (
@@ -47,10 +49,20 @@ from security import (
 APP_VERSION = "1.0.0"
 MAX_REQUEST_BYTES = 64 * 1024
 
+#: "Mango LAN Map": plano de planta opcional (imagen) subido por el usuario.
+MAX_MAP_UPLOAD_BYTES = 2 * 1024 * 1024
+MAP_ASSETS_DIR = Path(__file__).resolve().parent / "map_assets"
+FLOORPLAN_META_KEY = "floorplan"
+ALLOWED_FLOORPLAN = {
+    "png": ("image/png", b"\x89PNG\r\n\x1a\n"),
+    "jpg": ("image/jpeg", b"\xff\xd8\xff"),
+    "jpeg": ("image/jpeg", b"\xff\xd8\xff"),
+}
+
 app = Flask(__name__)
 app.config.update(
     JSON_SORT_KEYS=False,
-    MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES,
+    MAX_CONTENT_LENGTH=MAX_MAP_UPLOAD_BYTES,
     SECRET_KEY=os.urandom(32),
 )
 
@@ -112,6 +124,14 @@ def _security_guard():
                 403,
             )
 
+        # 2b. Límite estricto de cuerpo para las API JSON: la única subida
+        #     permitida (el plano del mapa) tiene su propio tope de 2 MB.
+        if (
+            request.path != "/api/map/floorplan"
+            and (request.content_length or 0) > MAX_REQUEST_BYTES
+        ):
+            return _json_error("El cuerpo de la petición es demasiado grande.", 413)
+
         # 3. Límite de peticiones (desactivado en la suite de pruebas).
         if not app.config.get("TESTING"):
             bucket, limiter = _rate_bucket(request.path)
@@ -171,6 +191,17 @@ def index():
     """Página principal del panel interactivo (incluye el token de sesión)."""
     return render_template(
         "index.html",
+        api_token=api_token.value,
+        app_version=APP_VERSION,
+        platform_label=PLATFORM_LABEL,
+    )
+
+
+@app.route("/map")
+def map_view():
+    """Vista "Mango LAN Map": mapa lógico en vivo de la red local."""
+    return render_template(
+        "map.html",
         api_token=api_token.value,
         app_version=APP_VERSION,
         platform_label=PLATFORM_LABEL,
@@ -348,6 +379,153 @@ def api_get_events():
         "latest": latest,
         "watcher": device_watcher.status(),
     })
+
+
+# ============================================================================
+# MANGO LAN MAP: mapa lógico en vivo (dispositivos, posiciones y plano)
+# ============================================================================
+
+#: Campos que el mapa expone de cada dispositivo (payload compacto y estable).
+MAP_DEVICE_FIELDS = (
+    "mac", "ip", "hostname", "custom_name", "custom_tags", "vendor", "model",
+    "device_type", "device_type_label", "os_guess", "services", "name_source",
+    "status", "is_blocked", "is_new", "first_seen", "last_seen",
+)
+
+
+def _map_payload(since_id: int = 0) -> dict:
+    """Construye el estado completo que consume la vista del mapa."""
+    context = scanner.detect_network_context()
+    gateway_ip = context.get("gateway", "")
+
+    nodes = map_layout.apply_layout(database.get_all_devices(config.db_path), gateway_ip)
+    trimmed = []
+    for node in nodes:
+        item = {key: node.get(key) for key in MAP_DEVICE_FIELDS}
+        item.update({
+            "display_name": node.get("custom_name") or node.get("hostname") or node.get("mac"),
+            "x": node.get("x"),
+            "y": node.get("y"),
+            "ring": node.get("ring"),
+            "center": bool(node.get("center")),
+            "pinned": bool(node.get("pinned")),
+        })
+        trimmed.append(item)
+
+    events, latest = device_watcher.events_since(since_id)
+    return {
+        "success": True,
+        "nodes": trimmed,
+        "events": events,
+        "latest": latest,
+        "stats": database.get_stats(config.db_path),
+        "network": context,
+        "gateway_ip": gateway_ip,
+        "watcher": device_watcher.status(),
+        "floorplan": bool(database.get_meta(config.db_path, FLOORPLAN_META_KEY, "")),
+        "pinned_count": sum(1 for item in trimmed if item["pinned"]),
+    }
+
+
+@app.route("/api/map", methods=["GET"])
+def api_map():
+    """Estado del mapa: dispositivos con posición, eventos nuevos y métricas."""
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        return _json_error("El parámetro 'since' debe ser un número entero.", 400)
+    return jsonify(_map_payload(since))
+
+
+@app.route("/api/map/positions", methods=["POST"])
+def api_map_positions():
+    """Guarda las posiciones que el usuario ha arrastrado (0-100 % del lienzo)."""
+    data = request.get_json(silent=True) or {}
+    positions = data.get("positions")
+    if not isinstance(positions, dict) or not positions:
+        return _json_error("Se espera un objeto 'positions' con {mac: [x, y]}.", 400)
+    if len(positions) > 512:
+        return _json_error("Demasiadas posiciones en una sola petición.", 400)
+
+    saved = 0
+    for mac, point in positions.items():
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            continue
+        if database.set_device_map_position(config.db_path, mac, point[0], point[1]):
+            saved += 1
+
+    return jsonify({"success": True, "saved": saved})
+
+
+@app.route("/api/map/positions/reset", methods=["POST"])
+def api_map_positions_reset():
+    """Devuelve uno o todos los dispositivos al layout automático."""
+    data = request.get_json(silent=True) or {}
+    mac = str(data.get("mac", "")).strip()
+    if mac and not validate_mac(mac):
+        return _json_error("Dirección MAC no válida.", 400)
+    count = database.reset_map_positions(config.db_path, mac or None)
+    return jsonify({"success": True, "reset": count})
+
+
+@app.route("/api/map/floorplan", methods=["POST"])
+def api_map_floorplan_upload():
+    """Sube un plano de planta (PNG/JPEG, máx. 2 MB) como fondo del mapa."""
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return _json_error("No se recibió ningún archivo (campo 'file').", 400)
+
+    extension = upload.filename.rsplit(".", 1)[-1].lower() if "." in upload.filename else ""
+    if extension not in ALLOWED_FLOORPLAN:
+        return _json_error("Formato no admitido. Usa una imagen PNG o JPEG.", 400)
+
+    payload = upload.read(MAX_MAP_UPLOAD_BYTES + 1)
+    if len(payload) > MAX_MAP_UPLOAD_BYTES:
+        return _json_error("La imagen supera el límite de 2 MB.", 413)
+
+    mimetype, magic = ALLOWED_FLOORPLAN[extension]
+    if not payload.startswith(magic):
+        return _json_error("El archivo no es una imagen PNG/JPEG válida.", 400)
+
+    try:
+        MAP_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        secure_file_permissions(str(MAP_ASSETS_DIR), 0o700)
+        for previous in MAP_ASSETS_DIR.glob("floorplan.*"):
+            previous.unlink(missing_ok=True)
+        target = MAP_ASSETS_DIR / f"floorplan.{extension}"
+        target.write_bytes(payload)
+        secure_file_permissions(str(target), 0o600)
+    except OSError as error:
+        return _json_error(f"No se pudo guardar el plano: {error}", 500)
+
+    database.set_meta(config.db_path, FLOORPLAN_META_KEY, target.name)
+    return jsonify({"success": True, "floorplan": target.name, "mimetype": mimetype})
+
+
+@app.route("/api/map/floorplan", methods=["GET"])
+def api_map_floorplan_get():
+    """Sirve el plano de planta subido (404 si no hay ninguno)."""
+    filename = database.get_meta(config.db_path, FLOORPLAN_META_KEY, "")
+    if not filename:
+        return _json_error("No hay plano configurado.", 404)
+    path = MAP_ASSETS_DIR / filename
+    if not path.is_file():
+        return _json_error("El plano ya no está disponible.", 404)
+    extension = path.suffix.lstrip(".").lower()
+    mimetype = ALLOWED_FLOORPLAN.get(extension, ("image/png", b""))[0]
+    response = send_file(path, mimetype=mimetype, conditional=True)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/map/floorplan", methods=["DELETE"])
+def api_map_floorplan_delete():
+    """Elimina el plano de planta del mapa."""
+    filename = database.get_meta(config.db_path, FLOORPLAN_META_KEY, "")
+    if filename:
+        (MAP_ASSETS_DIR / filename).unlink(missing_ok=True)
+    database.delete_meta(config.db_path, FLOORPLAN_META_KEY)
+    return jsonify({"success": True})
 
 
 @app.route("/api/history", methods=["GET"])

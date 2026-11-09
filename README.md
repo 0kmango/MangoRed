@@ -25,16 +25,17 @@ compatibilidad multiplataforma (`platform_compat.py` + `network_discovery.py`).
 5. [Distinción entre Datos Confirmados y Estimados](#-distinción-entre-datos-confirmados-y-estimados)
 6. [Reconocimiento de Dispositivos (tipo y nombre)](#-reconocimiento-de-dispositivos-tipo-y-nombre)
 7. [Tiempo Real: conexión y desconexión](#-tiempo-real-conexión-y-desconexión-en-el-momento)
-8. [Desconectar un dispositivo de la red (SSH)](#-desconectar-un-dispositivo-de-la-red-controlador-ssh)
-9. [Uso responsable: salvaguardas](#-uso-responsable-salvaguardas-incorporadas)
-10. [Arquitectura del Sistema](#-arquitectura-del-sistema)
-11. [Instalación y Requisitos](#-instalación-y-requisitos)
-12. [Instrucciones de Uso](#-instrucciones-de-uso)
-13. [Referencia de CLI y Variables de Entorno](#-referencia-de-cli-y-variables-de-entorno)
-14. [Integración con Routers](#-integración-con-routers-y-bloqueo-autorizado)
-15. [Configuración Manual en Routers sin API (Huawei, etc.)](#-configuración-manual-en-routers-sin-api-huawei-etc)
-16. [Límites Conocidos y Diagnóstico](#-límites-conocidos)
-17. [Ejecución de Pruebas Automatizadas](#-ejecución-de-pruebas-automatizadas)
+8. [Mango LAN Map: mapa lógico en vivo](#-mango-lan-map-mapa-lógico-en-vivo)
+9. [Desconectar un dispositivo de la red (SSH)](#-desconectar-un-dispositivo-de-la-red-controlador-ssh)
+10. [Uso responsable: salvaguardas](#-uso-responsable-salvaguardas-incorporadas)
+11. [Arquitectura del Sistema](#-arquitectura-del-sistema)
+12. [Instalación y Requisitos](#-instalación-y-requisitos)
+13. [Instrucciones de Uso](#-instrucciones-de-uso)
+14. [Referencia de CLI y Variables de Entorno](#-referencia-de-cli-y-variables-de-entorno)
+15. [Integración con Routers](#-integración-con-routers-y-bloqueo-autorizado)
+16. [Configuración Manual en Routers sin API (Huawei, etc.)](#-configuración-manual-en-routers-sin-api-huawei-etc)
+17. [Límites Conocidos y Diagnóstico](#-límites-conocidos)
+18. [Ejecución de Pruebas Automatizadas](#-ejecución-de-pruebas-automatizadas)
 
 ---
 
@@ -142,6 +143,10 @@ Todas estas defensas están cubiertas por pruebas automatizadas
   **en el momento** en que un equipo se conecta o se desconecta (toast en el panel,
   notificación de escritorio y, opcionalmente, notificación del navegador). Antes
   de declarar una desconexión se confirma con un ICMP puntual.
+* **Mango LAN Map (mapa lógico en vivo):** vista `/map` que dibuja la red como un
+  mapa —gateway en el centro, equipos en anillos por tipo, enlaces y animaciones—,
+  con posiciones **arrastrables y guardadas**, **plano de tu casa** como fondo,
+  zoom, búsqueda y panel de detalle. Ver *Mango LAN Map*.
 * **Desconexión Real de la Red:** el controlador **SSH** (OpenWrt/`uci` o cualquier
   router Linux/`iptables`) expulsa al equipo del Wi-Fi (lista negra MAC del AP +
   `hostapd_cli`) y le corta Internet, **verificando** que la regla quedó aplicada.
@@ -275,6 +280,43 @@ y la casilla de **notificaciones del navegador**.
 
 ---
 
+## 🗺 Mango LAN Map: mapa lógico en vivo
+
+**Mango LAN Map** es la vista de mapa incluida en MangoRed (botón **🗺 Mapa** o
+`http://127.0.0.1:5000/map`). Dibuja la red como un mapa: la **puerta de enlace en
+el centro** y los equipos repartidos en **anillos por tipo** (infraestructura,
+móviles/IoT, sin identificar), con enlaces al gateway y animaciones de
+conexión/desconexión.
+
+> ⚠️ Es un **mapa lógico** (topología y presencia en la red), **no** una
+> geolocalización: un equipo no puede conocer la posición GPS de otros
+> dispositivos de la red. Las posiciones son orientativas y **tú las colocas**.
+
+| Función | Cómo funciona |
+| :--- | :--- |
+| **Anillos por tipo** | Router/AP en el centro; impresoras, NAS, TV y ordenadores en el anillo 1; móviles, cámaras e IoT en el 2; desconocidos en el 3. Reparto determinista (ángulo áureo) para que cada equipo mantenga su sitio. |
+| **Arrastrar y guardar** | Arrastra cualquier dispositivo para colocarlo donde quieras; la posición se guarda en la base de datos (`map_x`, `map_y`, `map_pinned`) y se conserva entre reinicios. |
+| **Plano de tu casa** | Sube una imagen **PNG/JPEG** (máx. 2 MB) y colócala como fondo translúcido para situar cada equipo en su habitación. Validación por extensión y por firma del archivo. |
+| **Zoom y desplazamiento** | Rueda del ratón para acercar/alejar, arrastrar el fondo para moverse, botones ＋ － ⤢. |
+| **Búsqueda y leyenda** | Filtra por nombre, IP, MAC, fabricante o tipo (los que no coinciden se atenúan) y leyenda dinámica con los tipos presentes. |
+| **Detalle al clic** | Panel lateral con nombre, IP, MAC, fabricante, tipo, SO, modelo, puertos y marcas de tiempo, más acciones: centrar, devolver a posición automática y marcar como revisado. |
+| **Tiempo real** | Cada 2 s consulta el estado; las conexiones y desconexiones aparecen como aviso y el nodo se anima. |
+
+Endpoints de la vista:
+
+| Método | Ruta | Uso |
+| :--- | :--- | :--- |
+| GET | `/map` | Página del mapa (incluye el token de sesión) |
+| GET | `/api/map?since=<id>` | Nodos con posición, eventos nuevos, métricas y estado |
+| POST | `/api/map/positions` | Guarda posiciones arrastradas (`{ "positions": { "mac": [x, y] } }`) |
+| POST | `/api/map/positions/reset` | Vuelve al layout automático (uno o todos) |
+| POST/GET/DELETE | `/api/map/floorplan` | Sube, sirve o elimina el plano de planta |
+
+Todas las escrituras exigen el token local (`X-MangoRed-Token`); el plano se
+guarda con permisos restringidos en `map_assets/`.
+
+---
+
 ## 🔌 Desconectar un dispositivo de la red (controlador SSH)
 
 El controlador **SSH** (`router_type: ssh`, por defecto) aplica un bloqueo **real**.
@@ -345,6 +387,7 @@ MangoRed/
 ├── name_resolver.py            # Nombres visibles: DNS inverso + NetBIOS NBSTAT + mDNS
 ├── device_fingerprint.py       # Tipo de dispositivo: nombre + puertos TCP + fabricante OUI
 ├── event_watcher.py            # Vigilancia en tiempo real (conexión/desconexión + búfer de eventos)
+├── map_layout.py               # Mango LAN Map: anillos por tipo y posiciones (deterministas)
 ├── config.py                   # Configuración validada y credenciales con permisos 0600
 ├── scanner.py                  # Motor de descubrimiento (vecinos + barrido ICMP acotado)
 ├── database.py                 # SQLite: dispositivos, tipo, historial y auditoría
@@ -359,10 +402,14 @@ MangoRed/
 │   └── guide.py                # Guía de routers comerciales (Huawei, TP-Link, ASUS…)
 ├── static/
 │   ├── css/style.css           # Tema oscuro autocontenido
-│   └── js/app.js               # Cliente REST con token, modales y delegación de eventos
+│   ├── css/map.css             # Estilos de la vista Mango LAN Map
+│   ├── js/app.js               # Cliente REST con token, modales y delegación de eventos
+│   └── js/map.js               # Mapa SVG: anillos, drag&drop, zoom, plano y tiempo real
 ├── templates/
-│   └── index.html              # Panel HTML5 (inyecta el token de sesión)
-├── tests/                      # 232 pruebas con pytest
+│   ├── index.html              # Panel HTML5 (inyecta el token de sesión)
+│   └── map.html                # Vista Mango LAN Map
+├── map_assets/                 # Plano de planta subido por el usuario (ignorado en git)
+├── tests/                      # 260 pruebas con pytest
 │   ├── conftest.py             # Aísla la configuración real del desarrollador
 │   ├── test_api.py             # Endpoints + cabeceras + token + Host + filtro por tipo + eventos
 │   ├── test_security.py        # Token, rate limiter, Host, CSP
@@ -371,6 +418,8 @@ MangoRed/
 │   ├── test_device_fingerprint.py # Tipo de dispositivo (hostname/puertos/fabricante)
 │   ├── test_name_resolver.py   # Nombres por DNS/NetBIOS/mDNS y parseo de paquetes
 │   ├── test_event_watcher.py   # Tiempo real: línea base, conexión/desconexión y gracia
+│   ├── test_map_layout.py      # Mango LAN Map: anillos, límites y posiciones fijadas
+│   ├── test_map_api.py         # Mapa: /api/map, posiciones, plano y validaciones
 │   ├── test_ssh_router.py      # Comandos SSH reales y verificación posterior
 │   ├── test_config.py          # Validaciones y permisos de credenciales
 │   ├── test_database.py        # Certeza de datos, migración, huella y permisos
@@ -497,17 +546,20 @@ El servidor abre el navegador automáticamente (omítelo con `--no-browser`).
 ### 3. Operaciones Comunes
 
 1. **Escanear:** pulsa **"Escanear Ahora"** para refrescar el inventario al momento.
-2. **Identificar:** usa **"✏️ Editar"** para asignar alias, etiquetas y notas.
-3. **Reconocer dispositivos nuevos:** pulsa **"Marcar Todos como Conocidos"**.
-4. **Ver historial:** abre **"🕒 Historial"** para consultar eventos y auditoría.
-5. **Recibir avisos en vivo:** el indicador **● En vivo · 5s** confirma que la
+2. **Ver el mapa:** pulsa **"🗺️ Mapa"** para abrir **Mango LAN Map**: gateway en el
+   centro, equipos en anillos por tipo, arrástralos donde quieras y sube un plano
+   de tu casa como fondo (se guarda solo).
+3. **Identificar:** usa **"✏️ Editar"** para asignar alias, etiquetas y notas.
+4. **Reconocer dispositivos nuevos:** pulsa **"Marcar Todos como Conocidos"**.
+5. **Ver historial:** abre **"🕒 Historial"** para consultar eventos y auditoría.
+6. **Recibir avisos en vivo:** el indicador **● En vivo · 5s** confirma que la
    vigilancia está activa; cada conexión/desconexión aparece como toast (y como
    notificación del navegador si la activas en Ajustes).
-6. **Bloquear / desconectar:** abre **"⛔ Bloquear"**, revisa el **efecto real**
+7. **Bloquear / desconectar:** abre **"⛔ Bloquear"**, revisa el **efecto real**
    que muestra el modal, escribe el motivo y marca la casilla de confirmación.
    Requiere desactivar el Modo Solo Lectura y aceptar la declaración de
    autorización en Ajustes.
-7. **Ajustes:** intervalo de escaneo, límite de hosts, interfaz, notificaciones,
+8. **Ajustes:** intervalo de escaneo, límite de hosts, interfaz, notificaciones,
    reconocimiento de dispositivos, tiempo real y credenciales/SSH del router.
 
 ---
@@ -691,7 +743,7 @@ su interfaz web (la Guía explica los pasos).
 
 ## 🧪 Ejecución de Pruebas Automatizadas
 
-La suite incluye **232 pruebas** que cubren validación de red, seguridad de
+La suite incluye **260 pruebas** que cubren validación de red, seguridad de
 credenciales, controles de la API (token, Host, cabeceras, rate limit),
 compatibilidad multiplataforma, analizadores de `ip neigh`/`arp`/`ipconfig`/
 `route print`, reconocimiento de nombres (DNS/NetBIOS/mDNS), descubrimiento de
@@ -709,7 +761,7 @@ pytest -v
 Resultado esperado:
 
 ```text
-232 passed in 1.9s
+260 passed in 2.3s
 ```
 
 Las pruebas **no** tocan tu `mangored_config.json` real: `tests/conftest.py`

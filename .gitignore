@@ -28,6 +28,9 @@ mangored_config.json
 oui.txt
 nmap-mac-prefixes
 
+# Plano de planta del mapa (Mango LAN Map) y sus metadatos
+map_assets/
+
 # Artefactos del sistema operativo
 .DS_Store
 Thumbs.db
