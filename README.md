@@ -16,30 +16,30 @@ compatibilidad multiplataforma (`platform_compat.py` + `network_discovery.py`).
 
 ---
 
-## 📑 Índice de Contenidos
+## Índice de Contenidos
 
-1. [Compatibilidad de Plataformas](#-compatibilidad-de-plataformas)
-2. [Principios de Seguridad y Ética](#-principios-de-seguridad-y-ética)
-3. [Endurecimiento de la API Local](#-endurecimiento-de-la-api-local)
-4. [Características Principales](#-características-principales)
-5. [Distinción entre Datos Confirmados y Estimados](#-distinción-entre-datos-confirmados-y-estimados)
-6. [Reconocimiento de Dispositivos (tipo y nombre)](#-reconocimiento-de-dispositivos-tipo-y-nombre)
-7. [Tiempo Real: conexión y desconexión](#-tiempo-real-conexión-y-desconexión-en-el-momento)
-8. [Mango LAN Map: mapa lógico en vivo](#-mango-lan-map-mapa-lógico-en-vivo)
-9. [Desconectar un dispositivo de la red (SSH)](#-desconectar-un-dispositivo-de-la-red-controlador-ssh)
-10. [Uso responsable: salvaguardas](#-uso-responsable-salvaguardas-incorporadas)
-11. [Arquitectura del Sistema](#-arquitectura-del-sistema)
-12. [Instalación y Requisitos](#-instalación-y-requisitos)
-13. [Instrucciones de Uso](#-instrucciones-de-uso)
-14. [Referencia de CLI y Variables de Entorno](#-referencia-de-cli-y-variables-de-entorno)
-15. [Integración con Routers](#-integración-con-routers-y-bloqueo-autorizado)
-16. [Configuración Manual en Routers sin API (Huawei, etc.)](#-configuración-manual-en-routers-sin-api-huawei-etc)
-17. [Límites Conocidos y Diagnóstico](#-límites-conocidos)
-18. [Ejecución de Pruebas Automatizadas](#-ejecución-de-pruebas-automatizadas)
+1. [Compatibilidad de Plataformas](#compatibilidad-de-plataformas)
+2. [Principios de Seguridad y Ética](#principios-de-seguridad-y-ética)
+3. [Endurecimiento de la API Local](#endurecimiento-de-la-api-local)
+4. [Características Principales](#características-principales)
+5. [Distinción entre Datos Confirmados y Estimados](#distinción-entre-datos-confirmados-y-estimados)
+6. [Reconocimiento de Dispositivos (tipo y nombre)](#reconocimiento-de-dispositivos-tipo-y-nombre)
+7. [Tiempo Real: conexión y desconexión](#tiempo-real-conexión-y-desconexión-en-el-momento)
+8. [Mango LAN Map: mapa lógico en vivo](#mango-lan-map-mapa-lógico-en-vivo)
+9. [Desconectar un dispositivo de la red (SSH)](#desconectar-un-dispositivo-de-la-red-controlador-ssh)
+10. [Uso responsable: salvaguardas](#uso-responsable-salvaguardas-incorporadas)
+11. [Arquitectura del Sistema](#arquitectura-del-sistema)
+12. [Instalación y Requisitos](#instalación-y-requisitos)
+13. [Instrucciones de Uso](#instrucciones-de-uso)
+14. [Referencia de CLI y Variables de Entorno](#referencia-de-cli-y-variables-de-entorno)
+15. [Integración con Routers](#integración-con-routers-y-bloqueo-autorizado)
+16. [Configuración Manual en Routers sin API (Huawei, etc.)](#configuración-manual-en-routers-sin-api-huawei-etc)
+17. [Límites Conocidos y Diagnóstico](#límites-conocidos)
+18. [Ejecución de Pruebas Automatizadas](#ejecución-de-pruebas-automatizadas)
 
 ---
 
-## 🖥 Compatibilidad de Plataformas
+## Compatibilidad de Plataformas
 
 | Función | Linux (Kali, Debian, Ubuntu, Arch, Fedora…) | Windows 10 / 11 | macOS |
 | :--- | :--- | :--- | :--- |
@@ -58,7 +58,7 @@ detección nunca lanza excepciones.**
 
 ---
 
-## 🛡 Principios de Seguridad y Ética
+## Principios de Seguridad y Ética
 
 * **Modo Solo Lectura por Defecto (`READ_ONLY = True`):** Cualquier acción que
   modifique reglas en el router se rechaza a nivel de API hasta que el usuario
@@ -92,7 +92,7 @@ detección nunca lanza excepciones.**
 
 ---
 
-## 🔒 Endurecimiento de la API Local
+## Endurecimiento de la API Local
 
 El panel escucha en `127.0.0.1`, pero un servicio local sigue siendo alcanzable
 por cualquier proceso del equipo y por páginas web maliciosas que intenten hablar
@@ -114,7 +114,7 @@ Todas estas defensas están cubiertas por pruebas automatizadas
 
 ---
 
-## ✨ Características Principales
+## Características Principales
 
 * **Detección Automática de Dispositivos:** Identifica dinámicamente Dirección IP,
   Dirección MAC, Nombre de host (si está disponible), Fabricante (base de datos
@@ -160,7 +160,7 @@ Todas estas defensas están cubiertas por pruebas automatizadas
 
 ---
 
-## 🔍 Distinción entre Datos Confirmados y Estimados
+## Distinción entre Datos Confirmados y Estimados
 
 MangoRed distingue claramente en su interfaz la certeza de cada dato mostrado
 para evitar conclusiones erróneas:
@@ -175,7 +175,7 @@ para evitar conclusiones erróneas:
 
 ---
 
-## 🔎 Reconocimiento de Dispositivos (tipo y nombre)
+## Reconocimiento de Dispositivos (tipo y nombre)
 
 Cada dispositivo aparece en el inventario con un **icono y una etiqueta de tipo**
 (`📱 Móvil · Android`, `💻 Ordenador · Windows`, `📡 Router`, `🖨️ Impresora`…), el
@@ -197,7 +197,7 @@ La puerta de enlace se marca siempre como **Router** y el propio equipo como
 **Ordenador** con su sistema operativo real. Apple, sin más datos, se muestra como
 «Desconocido · iOS/iPadOS/macOS» para no afirmar algo incorrecto.
 
-### 📱 Dispositivos iOS (iPhone / iPad): sí, se reconocen
+### Dispositivos iOS (iPhone / iPad): sí, se reconocen
 
 MangoRed identifica un iPhone o un iPad por **cuatro vías independientes**, de
 modo que basta con que una funcione:
@@ -247,7 +247,7 @@ ensuciar el inventario.
 
 ---
 
-## ⚡ Tiempo Real: conexión y desconexión en el momento
+## Tiempo Real: conexión y desconexión en el momento
 
 `event_watcher.py` ejecuta un hilo propio que cada `watch_interval` segundos
 (5 por defecto, mínimo 2) lee la **tabla de vecinos ARP** —sin barridos ni ping
@@ -280,7 +280,7 @@ y la casilla de **notificaciones del navegador**.
 
 ---
 
-## 🗺 Mango LAN Map: mapa lógico en vivo
+## Mango LAN Map: mapa lógico en vivo
 
 **Mango LAN Map** es la vista de mapa incluida en MangoRed (botón **🗺 Mapa** o
 `http://127.0.0.1:5000/map`). Dibuja la red como un mapa: la **puerta de enlace en
@@ -317,7 +317,7 @@ guarda con permisos restringidos en `map_assets/`.
 
 ---
 
-## 🔌 Desconectar un dispositivo de la red (controlador SSH)
+## Desconectar un dispositivo de la red (controlador SSH)
 
 El controlador **SSH** (`router_type: ssh`, por defecto) aplica un bloqueo **real**.
 En modo `full` hace dos cosas y **verifica ambas**:
@@ -355,7 +355,7 @@ En modo `full` hace dos cosas y **verifica ambas**:
 
 ---
 
-## ⚖ Uso responsable: salvaguardas incorporadas
+## Uso responsable: salvaguardas incorporadas
 
 MangoRed es una herramienta de **administración defensiva**. Para que no pueda
 convertirse en un arma contra redes ajenas, incorpora varias barreras:
@@ -376,7 +376,7 @@ convertirse en un arma contra redes ajenas, incorpora varias barreras:
 
 ---
 
-## 🏗 Arquitectura del Sistema
+## Arquitectura del Sistema
 
 ```text
 MangoRed/
@@ -455,7 +455,7 @@ eventos de conexión/desconexión que consume `GET /api/events`.
 
 ---
 
-## 🚀 Instalación y Requisitos
+## Instalación y Requisitos
 
 ### Requisitos
 
@@ -517,7 +517,7 @@ fabricantes más habituales.
 
 ---
 
-## 💻 Instrucciones de Uso
+## Instrucciones de Uso
 
 ### 1. Iniciar MangoRed
 
@@ -564,7 +564,7 @@ El servidor abre el navegador automáticamente (omítelo con `--no-browser`).
 
 ---
 
-## ⌨ Referencia de CLI y Variables de Entorno
+## Referencia de CLI y Variables de Entorno
 
 ### Argumentos de línea de comandos
 
@@ -601,7 +601,7 @@ curl -s -X POST -H "X-MangoRed-Token: $TOKEN" -H 'Content-Type: application/json
 
 ---
 
-## 🔌 Integración con Routers y Bloqueo Autorizado
+## Integración con Routers y Bloqueo Autorizado
 
 MangoRed ofrece cuatro controladores reales (`router/`). **No hay modo simulador:**
 todas las acciones modifican la red de verdad (o fallan con un error explícito).
@@ -617,7 +617,7 @@ todas las acciones modifican la red de verdad (o fallan con un error explícito)
    del AP + `hostapd_cli deauthenticate`) y corta Internet con `uci` (OpenWrt) o
    `iptables` (cadena `MANGORED`), verificando que todo quedó aplicado. Es el
    único controlador que aplica el **modo de bloqueo**; ver
-   [Desconectar un dispositivo de la red](#-desconectar-un-dispositivo-de-la-red-controlador-ssh).
+   [Desconectar un dispositivo de la red](#desconectar-un-dispositivo-de-la-red-controlador-ssh).
 4. **Webhook genérico (`generic_webhook`):** envía POST a una pasarela local
    (Home Assistant, script propio...) con token Bearer. Avisa si el canal es HTTP
    sin cifrar.
@@ -652,7 +652,7 @@ también están integrados en la pestaña **"📖 Guía"** del panel.
 
 ---
 
-## 📖 Configuración Manual en Routers sin API (Huawei, etc.)
+## Configuración Manual en Routers sin API (Huawei, etc.)
 
 Si tu router residencial (por ejemplo, un router/ONT de operadora **Huawei
 EchoLife / OptiXstar**) no dispone de API abierta para terceros, aplica el
@@ -670,7 +670,7 @@ bloqueo mediante su interfaz web oficial:
 
 ---
 
-## ⚠ Límites Conocidos
+## Límites Conocidos
 
 ### Solución de problemas: «no se puede conectar por SSH»
 
@@ -741,15 +741,16 @@ su interfaz web (la Guía explica los pasos).
 
 ---
 
-## 🧪 Ejecución de Pruebas Automatizadas
+## Ejecución de Pruebas Automatizadas
 
 La suite incluye **260 pruebas** que cubren validación de red, seguridad de
 credenciales, controles de la API (token, Host, cabeceras, rate limit),
 compatibilidad multiplataforma, analizadores de `ip neigh`/`arp`/`ipconfig`/
 `route print`, reconocimiento de nombres (DNS/NetBIOS/mDNS), descubrimiento de
 servicios y modelos Apple/Google Cast, clasificación de tipos de dispositivo,
-vigilancia en tiempo real (línea base, gracia y confirmación ICMP), comandos SSH
-con verificación posterior, migración del esquema SQLite, certeza de datos,
+vigilancia en tiempo real (línea base, gracia y confirmación ICMP), mapa lógico
+(layout, posiciones persistentes y plano de planta), comandos SSH con
+verificación posterior, migración del esquema SQLite, certeza de datos,
 controladores de router y endpoints.
 
 ```bash
