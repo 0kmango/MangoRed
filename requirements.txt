@@ -1,9 +1,9 @@
-flask>=3.0.0
-requests>=2.31.0
-waitress>=3.0.0
-psutil>=5.9.0
-paramiko>=3.4.0
-pytest>=8.0.0
+flask>=3.1.3
+requests>=2.34.2
+waitress>=3.0.2
+psutil>=7.2.2
+paramiko>=5.1.0
+pytest>=9.2.0
 
 # Reporte de cobertura (lo usa el workflow de CI para publicar coverage.xml)
-pytest-cov>=5.0.0
+pytest-cov>=7.1.0
