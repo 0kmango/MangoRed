@@ -1,5 +1,8 @@
 # 🥭 MangoRed — Monitor Doméstico de Red Local (Linux, Windows y macOS)
 
+[![Pruebas](https://github.com/0kmango/MangoRed/actions/workflows/tests.yml/badge.svg)](https://github.com/0kmango/MangoRed/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+
 **MangoRed** es una herramienta defensiva y de administración doméstica para
 supervisar redes locales, destinada **exclusivamente a redes de tu propiedad o
 en las que cuentas con autorización explícita para administrar**.
@@ -758,6 +761,15 @@ cd MangoRed
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pytest -v
 ```
+
+### Integración continua
+
+Cada `push` a `main` y cada *pull request* ejecutan la suite completa en
+**GitHub Actions** sobre Python **3.11, 3.12 y 3.13**
+(`.github/workflows/tests.yml`). El workflow también comprueba que los módulos
+principales importen antes de correr las pruebas, para que un archivo faltante
+o mal renombrado falle en segundos y con un mensaje claro. La insignia de la
+cabecera muestra el estado del último build.
 
 Resultado esperado:
 

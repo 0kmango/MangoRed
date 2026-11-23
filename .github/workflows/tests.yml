@@ -1,0 +1,44 @@
+name: Pruebas
+
+# La suite tiene 260 pruebas unitarias que no tocan la red real (todo va
+# simulado con mocks), así que puede correr completa en cada push sin riesgo
+# de escanear la red de otra persona.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verificar que los módulos importan (falla rápido si falta un archivo)
+        run: |
+          python -c "import app, config, database, network_discovery, platform_compat, security"
+
+      - name: Ejecutar la suite de pruebas
+        run: pytest -q
