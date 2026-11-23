@@ -40,5 +40,12 @@ jobs:
         run: |
           python -c "import app, config, database, network_discovery, platform_compat, security"
 
-      - name: Ejecutar la suite de pruebas
-        run: pytest -q
+      - name: Ejecutar la suite de pruebas con cobertura
+        run: pytest -q --cov=. --cov-report=term-missing --cov-report=xml
+
+      - name: Publicar el reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-python-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: error
