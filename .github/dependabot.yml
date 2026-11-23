@@ -1,0 +1,32 @@
+version: 2
+
+# Actualizaciones automáticas de dependencias.
+# Las de pip se agrupan en un solo PR semanal para no llenar la bandeja de
+# notificaciones (MangoRed declara 5 dependencias directas).
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      dependencias-python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencias"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      acciones:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencias"

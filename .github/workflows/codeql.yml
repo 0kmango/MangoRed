@@ -1,0 +1,38 @@
+name: CodeQL
+
+# Análisis estático de seguridad con CodeQL sobre el código Python.
+# Los resultados aparecen en la pestaña Security → Code scanning alerts.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # todos los lunes a las 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analizar:
+    name: Analizar Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          # `security-and-quality` añade consultas de mantenibilidad además
+          # de las de seguridad.
+          queries: security-and-quality
+
+      - name: Analizar
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
